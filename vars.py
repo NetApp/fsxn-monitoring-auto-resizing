@@ -1,0 +1,10 @@
+fsxMgmtIp = ""
+fsxId = ""
+username = ""
+resize_threshold = 90
+sender_email = ""
+recipient_email =""
+fsx_password_ssm_parameter = ""
+warn_notification = True
+enable_snapshot_deletion = True
+snapshot_age_threshold_in_days = 30

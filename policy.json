@@ -1,0 +1,70 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket"
+            ],
+            "Resource": "arn:aws:s3:::*"
+        },
+        {
+            "Sid": "VisualEditor1",
+            "Effect": "Allow",
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject"
+            ],
+            "Resource": "arn:aws:s3:::*/*"
+        },
+        {
+            "Sid": "VisualEditor2",
+            "Effect": "Allow",
+            "Action": [
+                "s3-object-lambda:GetObject",
+                "s3-object-lambda:PutObject",
+                "s3-object-lambda:ListBucket",
+                "s3-object-lambda:GetObjectVersion",
+                "s3-object-lambda:ListBucketVersions"
+            ],
+            "Resource": "arn:aws:s3-object-lambda:*:${AWS::AccountId}:accesspoint/*"
+        },
+        {
+            "Sid": "VisualEditor3",
+            "Effect": "Allow",
+            "Action": [
+                "fsx:UpdateFileSystem",
+                "fsx:UpdateVolume"
+            ],
+            "Resource": [
+                "arn:aws:fsx:*:${AWS::AccountId}:file-system/*",
+                "arn:aws:fsx:*:${AWS::AccountId}:volume/*"
+            ]
+        },
+        {
+            "Sid": "VisualEditor4",
+            "Effect": "Allow",
+            "Action": [
+                "fsx:DescribeFileSystems",
+                "fsx:DescribeVolumes"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "VisualEditor5",
+            "Effect": "Allow",
+            "Action": "ses:SendEmail",
+            "Resource": [
+                "arn:aws:ses:*:${AWS::AccountId}:configuration-set/*",
+                "arn:aws:ses:*:${AWS::AccountId}:identity/*"
+            ]
+        },
+        {
+            "Sid": "VisualEditor6",
+            "Effect": "Allow",
+            "Action": "ssm:GetParameter",
+            "Resource": "arn:aws:ssm:*:${AWS::AccountId}:parameter/*"
+        }
+    ]
+}
