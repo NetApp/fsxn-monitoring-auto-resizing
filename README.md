@@ -34,7 +34,7 @@ Before you begin, ensure that the following prerequisites are met:
 
 
 ## Solution Architecture and Deployment Guide
-The documentation for the solution architecture used and the deployment guidelines are available at https://docs.netapp.com/us-en/netapp-solutions/automation/fsxn_monitoring_resizing_automation.html>
+The documentation for the solution architecture used and the deployment guidelines are available at https://docs.netapp.com/us-en/netapp-solutions/automation/fsxn_monitoring_resizing_automation.html
 
 Note: The solution is provided as-is. Please test before deploying to production
 
