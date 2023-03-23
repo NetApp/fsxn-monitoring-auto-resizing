@@ -43,6 +43,7 @@ def lambda_handler(event, context):
     lun_details = []
     snapshot_details = []
     email_requirements = []
+    clone_vol_details = []
     
     #ssh to fsxn and get aggr1 capacity
     ssh_client = paramiko.SSHClient()
@@ -365,17 +366,32 @@ def lambda_handler(event, context):
     
     for i in range(len(response.json()['records'])):
         temp = response.json()['records'][i]['uuid']
-        url = "https://{}/api/storage/volumes/{}?fields=*,guarantee".format(vars.fsxMgmtIp,temp)
+        url = "https://{}/api/storage/volumes/{}?fields=*,guarantee,clone.is_flexclone,clone.parent_snapshot.name".format(vars.fsxMgmtIp,temp)
         response_vol = requests.get(url, headers=headers, verify=False)
-        vol_details.append(
-            {
-                "name": response_vol.json()['name'], 
-                "uuid": response.json()['records'][i]['uuid'],
-                "space_total": response_vol.json()['space']['size'],
-                "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
-                "guarantee": response_vol.json()['guarantee']['type']
-            }
-        )
+        if(response_vol.json()["clone"]["is_flexclone"]):
+            vol_details.append(
+                {
+                    "name": response_vol.json()['name'], 
+                    "uuid": response.json()['records'][i]['uuid'],
+                    "space_total": response_vol.json()['space']['size'],
+                    "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
+                    "guarantee": response_vol.json()['guarantee']['type'],
+                    "is_flexclone": True,
+                    "parent_snapshot": response_vol.json()['clone']['parent_snapshot']['name']
+                }
+            )
+        else:
+            vol_details.append(
+                {
+                    "name": response_vol.json()['name'], 
+                    "uuid": response.json()['records'][i]['uuid'],
+                    "space_total": response_vol.json()['space']['size'],
+                    "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
+                    "guarantee": response_vol.json()['guarantee']['type'],
+                    "is_flexclone": False,
+                    "parent_snapshot": ""
+                }
+            )
         
         #check if volume needs resizing and resize if allowed and send email
         vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(response_vol.json()['space']['size']))*100 
@@ -581,7 +597,7 @@ def lambda_handler(event, context):
                 unit = size_str[-2:].upper()
                 
                 # Convert the size value to an integer
-                size_value = int(size_str[:-2])
+                size_value = float(size_str[:-2])
                 
                 # Define a dictionary to map units to conversion factors
                 unit_map = {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
@@ -611,16 +627,28 @@ def lambda_handler(event, context):
 
             except ValueError as e:
                  print(f"Error parsing size value: {size_str}")
-                 
+     
+    #populate flexclone details
+    for vol in vol_details:
+        if(vol["is_flexclone"]):
+            for snapshot in snapshot_details:
+                if(vol["parent_snapshot"] == snapshot["name"]):
+                    clone_vol_details.append(
+                        {
+                            "name": snapshot["vol_name"],
+                            "parent_snapshot": vol["parent_snapshot"],
+                            "snapshot_size": float(snapshot["size_in_bytes"])/1024
+                        }
+                    )
     #send consolidated email
-    sendEmail(email_requirements)
+    sendEmail(email_requirements, clone_vol_details)
 
     return {
         'statusCode': 200,
         'body': "success"
     }
 
-def sendEmail(email_requirements):
+def sendEmail(email_requirements, clone_vol_details):
     output_str = []
     for email in email_requirements:
         case = email["case"]
@@ -645,8 +673,18 @@ def sendEmail(email_requirements):
             output_str.append("Storage Capacity used is greater than 75%. File System Storage Capacity will be resized once it crosses {}%".format(threshold))
         elif(case == "snapshot_delete"):
             output_str.append("Snapshot {} for volume {} has been deleted as it is {} days old. Amount of space freed up = {} KB".format(name["name"], threshold, new_size, int(int(name["size_in_bytes"])/1024)))
+    
+    if(len(clone_vol_details)):
+        #add clone vol details to output string
+        output_str.append("Clone information:")
+        output_str.append("Vol Name\t\tParent Snapshot\t\tSnapshot Size\n")
         
-    output_str = '\n'.join(output_str)
+        for clone in clone_vol_details:
+            output_str.append("{: <16}\t{: <24}\t{: <16}\n".format(clone["name"], clone["parent_snapshot"], str(clone["snapshot_size"]) + "KB"))
+    
+    output_str = '\n\n'.join(output_str)
+    
+    
     
     SUBJECT = "FSX for NetApp ONTAP Monitoring Notification: AWS Lambda"
     client = boto3.client('ses')
@@ -698,17 +736,32 @@ def getVolDetails(headers, vol_details, fsxMgmtIp):
     
     for i in range(len(response.json()['records'])):
         temp = response.json()['records'][i]['uuid']
-        url = "https://{}/api/storage/volumes/{}?fields=*,guarantee".format(fsxMgmtIp,temp)
+        url = "https://{}/api/storage/volumes/{}?fields=*,guarantee,clone.is_flexclone,clone.parent_snapshot.name".format(fsxMgmtIp,temp)
         response_vol = requests.get(url, headers=headers, verify=False)
-        vol_details.append(
-            {
-                "name": response_vol.json()['name'], 
-                "uuid": response.json()['records'][i]['uuid'],
-                "space_total": response_vol.json()['space']['size'],
-                "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
-                "guarantee": response_vol.json()['guarantee']['type']
-            }
-        )
+        if(response_vol.json()["clone"]["is_flexclone"]):
+            vol_details.append(
+                {
+                    "name": response_vol.json()['name'], 
+                    "uuid": response.json()['records'][i]['uuid'],
+                    "space_total": response_vol.json()['space']['size'],
+                    "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
+                    "guarantee": response_vol.json()['guarantee']['type'],
+                    "is_flexclone": True,
+                    "parent_snapshot": response_vol.json()['clone']['parent_snapshot']['name']
+                }
+            )
+        else:
+            vol_details.append(
+                {
+                    "name": response_vol.json()['name'], 
+                    "uuid": response.json()['records'][i]['uuid'],
+                    "space_total": response_vol.json()['space']['size'],
+                    "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
+                    "guarantee": response_vol.json()['guarantee']['type'],
+                    "is_flexclone": False,
+                    "parent_snapshot": ""
+                }
+            )
     return vol_details
 
 def getSnapshotDetails(headers, vol_details, fsxMgmtIp, snapshot_details):
