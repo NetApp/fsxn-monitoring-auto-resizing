@@ -1,4 +1,4 @@
-# fsxn-monitoring-auto-resizing
+# FSx for ONTAP Monitoring and Auto-Resizing using AWS Lambda Function
 FSx for ONTAP is a first party enterprise-grade cloud storage service available on AWS that provides highly reliable, scalable, high-performing and feature-rich file storage built on the popular NetApp ONTAP file system. 
 
 FSx for ONTAP provides seamless deployment and management. No storage expertise is required to get started. To further simplify monitoring, an AWS lamdba function (to automate resizing of total storage capacity, volume size or LUN size based on threshold) can be used.  This document provides a step by step guide to create an automated setup that monitors FSx for ONTAP at regular intervals, notifies and resizes when a user-specified threshold is crossed and notifies the administrator of the resizing activity. 
