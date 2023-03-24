@@ -113,7 +113,7 @@ def lambda_handler(event, context):
                 {
                     "case": "lun_notification",
                     "name": response_lun_loop.json()['location']['logical_unit'],
-                    "threshold": vars.resize_threshold,
+                    "use_per": round(lun_per,2),
                     "new_size": 0,
                     "warn": False
                 }
@@ -146,6 +146,8 @@ def lambda_handler(event, context):
                 
                 url = "https://{}/api/storage/volumes/{}?fields=*,guarantee".format(vars.fsxMgmtIp,response_lun_loop.json()['location']['volume']['uuid'])
                 response_vol = requests.get(url, headers=headers, verify=False)
+                vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(response_vol.json()['space']['size']))*100 
+
                 #update LUN size if vol size can accomodate
                 if(float(lun_space_used * 1.05) < float(response_vol.json()['space']['size'])):
                     data = { "space": { "size": new_lun_size}}
@@ -164,7 +166,7 @@ def lambda_handler(event, context):
                         {
                             "case": "lun",
                             "name": response_lun_loop.json()['location']['logical_unit'],
-                            "threshold": vars.resize_threshold,
+                            "use_per": round(lun_per,2),
                             "new_size": new_lun_size,
                             "warn": False
                         }
@@ -210,7 +212,7 @@ def lambda_handler(event, context):
                                 {
                                     "case": "vol",
                                     "name": response_vol.json()['name'],
-                                    "threshold": vars.resize_threshold,
+                                    "use_per": round(vol_per,2),
                                     "new_size": new_vol_size_mb,
                                     "warn": False
                                 }
@@ -233,7 +235,7 @@ def lambda_handler(event, context):
                                 {
                                     "case": "lun",
                                     "name": response_lun_loop.json()['location']['logical_unit'],
-                                    "threshold": vars.resize_threshold,
+                                    "use_per": round(lun_per,2),
                                     "new_size": new_lun_size,
                                     "warn": False
                                 }
@@ -253,7 +255,7 @@ def lambda_handler(event, context):
                                 {
                                     "case": "sc",
                                     "name": response_lun_loop.json()['location']['volume']['name'],
-                                    "threshold": vars.resize_threshold,
+                                    "use_per": vars.resize_threshold,
                                     "new_size": size,
                                     "warn": True
                                 }
@@ -299,7 +301,7 @@ def lambda_handler(event, context):
                             {
                                 "case": "vol",
                                 "name": response_vol.json()['name'],
-                                "threshold": vars.resize_threshold,
+                                "use_per": round(vol_per,2),
                                 "new_size": new_vol_size_mb,
                                 "warn": False
                             }
@@ -322,7 +324,7 @@ def lambda_handler(event, context):
                             {
                                 "case": "lun",
                                 "name": response_lun_loop.json()['location']['logical_unit'],
-                                "threshold": vars.resize_threshold,
+                                "use_per": round(lun_per,2),
                                 "new_size": new_lun_size,
                                 "warn": False
                             }
@@ -347,7 +349,7 @@ def lambda_handler(event, context):
                     {
                         "case": "lun",
                         "name": response_lun_loop.json()['location']['logical_unit'],
-                        "threshold": vars.resize_threshold,
+                        "use_per": round(lun_per,2),
                         "new_size": new_lun_size,
                         "warn": False
                     }
@@ -400,7 +402,7 @@ def lambda_handler(event, context):
                 {
                     "case": "vol_notification",
                     "name": response_vol.json()['name'],
-                    "threshold": vars.resize_threshold,
+                    "use_per": round(vol_per,2),
                     "new_size": 0,
                     "warn": False
                 }
@@ -445,7 +447,7 @@ def lambda_handler(event, context):
                         {
                             "case": "vol",
                             "name": response_vol.json()['name'],
-                            "threshold": vars.resize_threshold,
+                            "use_per": round(vol_per,2),
                             "new_size": new_vol_size_mb,
                             "warn": False
                         }
@@ -465,7 +467,7 @@ def lambda_handler(event, context):
                         {
                             "case": "sc",
                             "name": response_vol.json()['name'],
-                            "threshold": vars.resize_threshold,
+                            "use_per": vars.resize_threshold,
                             "new_size": size,
                             "warn": True
                         }
@@ -494,7 +496,7 @@ def lambda_handler(event, context):
                     {
                         "case": "vol",
                         "name": response_vol.json()['name'],
-                        "threshold": vars.resize_threshold,
+                        "use_per": round(vol_per,2),
                         "new_size": new_vol_size_mb,
                         "warn": False
                     }
@@ -520,19 +522,18 @@ def lambda_handler(event, context):
             {
                 "case": "sc_notification",
                 "name": "null",
-                "threshold": vars.resize_threshold,
+                "use_per": vars.resize_threshold,
                 "new_size": 0,
                 "warn": False
             }
         )
     if int(sc_used_per * 1.1) > int(vars.resize_threshold):
         size = float(aggr_total) * 1.1
-        while float(size) < float(aggr_total):
-            size = size * 1.1
         size = float(storage_capacity) + (float(size) - float(aggr_total))
         if(float(size) < 1.1*float(storage_capacity)):
+            size = float(storage_capacity) * 1.1
             while float(size) < float(storage_capacity):
-                size = 1.1 * float(storage_capacity)
+                size *= 1.1 
         size = math.ceil(size)
         update = client_fsx.update_file_system(FileSystemId = vars.fsxId, StorageCapacity = size)
         log = "Total volume space used is greater than {}%. File System Storage Capacity resized to: {} GB".format(vars.resize_threshold,size)
@@ -541,7 +542,7 @@ def lambda_handler(event, context):
             {
                 "case": "sc",
                 "name": "null",
-                "threshold": vars.resize_threshold,
+                "use_per": vars.resize_threshold,
                 "new_size": size,
                 "warn": False
             }
@@ -619,7 +620,7 @@ def lambda_handler(event, context):
                         {
                             "case": "snapshot_delete",
                             "name": snapshot,
-                            "threshold": snapshot["vol_name"],
+                            "use_per": snapshot["vol_name"],
                             "new_size": int(age_days),
                             "warn": False
                         }
@@ -649,44 +650,105 @@ def lambda_handler(event, context):
     }
 
 def sendEmail(email_requirements, clone_vol_details):
-    output_str = []
+    lun_output_str = []
+    vol_output_str = []
+    sc_output_str = []
+    snapshot_output_str = []
+    clone_output_str = []
+    output_html = ["<h1>FSx for ONTAP Monitoring</h1><br>"]
+    
+    
+    # Define inline styles
+    styles = """
+    <style>
+        .card {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+            margin-bottom: 1rem;
+        }
+        .card-body {
+            padding: 1rem;
+        }
+        .card-title {
+            margin-bottom: 1rem;
+        }
+        .card-text {
+            margin-bottom: 0.5rem;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            padding: 0.5rem;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+    """
+    
+    sc_output_str.insert(0, styles)
+    
+    
     for email in email_requirements:
         case = email["case"]
         name = email["name"]
-        threshold = email["threshold"]
+        use_per = email["use_per"]
         new_size = email["new_size"]
         warn = email["warn"]
 
         if(case == "lun"):
-            output_str.append("LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(name,threshold,round(new_size/(1024*1024*1024),2)))
+            lun_output_str.append("<tr><td>{}</td><td>{}%</td><td style='color: red;'>{}</td><td>{}GB</td></tr>".format(name, use_per, "Resize", round(new_size/(1024*1024*1024),2)))
         elif(case == "vol"):
-            output_str.append("Volume space used for volume {} is greater than {}%. Volume resized to: {} GB".format(name, threshold, round(new_size/1024,2)))
+            vol_output_str.append("<tr><td>{}</td><td>{}%</td><td style='color: red;'>{}</td><td>{}GB</td></tr>".format(name, use_per, "Resize", round(new_size/1024,2)))
         elif(case == "sc" and warn == False):
-            output_str.append("Storage Capacity used is greater than {}%. File System Storage Capacity resized to: {} GB".format(threshold , new_size))
+            sc_output_str.append("<p class='card-text'>Storage Capacity used is greater than {}%. File System Storage Capacity resized to: {} GB</p>".format(use_per , new_size))
         elif(case == "sc" and warn == True):
-            output_str.append("Volume {} needs to be resized. However Storage capacity is out of space. Hence, File System Storage Capacity resized to: {} GB. Please run the automation again to update the volume once storage capacity update is completed successfully.".format(name, new_size))
+            sc_output_str.append("<p class='card-text'>Volume {} needs to be resized. However Storage capacity is out of space. Hence, File System Storage Capacity resized to: {} GB. Please run the automation again to update the volume once storage capacity update is completed successfully.</p>".format(name, new_size))
         elif(case == "lun_notification"):
-            output_str.append("LUN space used for LUN {} is greater than 75%. LUN will be resized once it crosses {}%".format(name,threshold))
+            lun_output_str.append("<tr><td>{}</td><td>{}%</td><td style='color: orange;'>{}</td><td></td></tr>".format(name, use_per, "Warning"))
         elif(case == "vol_notification"):
-            output_str.append("Volume space used for volume {} is greater than 75%. Volume will be resized once it crosses {}%".format(name, threshold))
+            vol_output_str.append("<tr><td>{}</td><td>{}%</td><td style='color: orange;'>{}</td><td></td></tr>".format(name, use_per, "Warning"))
         elif(case == "sc_notification"):
-            output_str.append("Storage Capacity used is greater than 75%. File System Storage Capacity will be resized once it crosses {}%".format(threshold))
+            sc_output_str.append("<p class='card-text'>Storage Capacity used is greater than 75%. File System Storage Capacity will be resized once it crosses {}%</p>".format(use_per))
         elif(case == "snapshot_delete"):
-            output_str.append("Snapshot {} for volume {} has been deleted as it is {} days old. Amount of space freed up = {} KB".format(name["name"], threshold, new_size, int(int(name["size_in_bytes"])/1024)))
+            snapshot_output_str.append("<tr><td>{}</td><td>{}</td><td>{} day</td><td>{}KB</td><td style='color: red;'>{}</td></tr>".format(name["name"], use_per, new_size, int(int(name["size_in_bytes"])/1024), "Deleted"))
     
     if(len(clone_vol_details)):
         #add clone vol details to output string
-        output_str.append("Clone information:")
-        output_str.append("Vol Name\t\tParent Snapshot\t\tSnapshot Size\n")
+        clone_output_str.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>Clone Information</h5><div class='table-responsive'><table class='table table-striped'><thead><tr><th>Volume Name</th><th>Parent Snapshot</th><th>Snapshot Size</th></tr></thead><tbody>")
         
         for clone in clone_vol_details:
-            output_str.append("{: <16}\t{: <24}\t{: <16}\n".format(clone["name"], clone["parent_snapshot"], str(clone["snapshot_size"]) + "KB"))
+            clone_output_str.append("<tr><td>{}</td><td>{}</td><td>{}</td></tr>".format(clone["name"], clone["parent_snapshot"], str(clone["snapshot_size"]) + "KB"))
+            
+        clone_output_str.append("</tbody></table></div></div></div>")
     
-    output_str = '\n\n'.join(output_str)
+    if len(sc_output_str):
+        output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>File System Storage Capacity Notification</h5>")
+        output_html += sc_output_str
+        output_html.append("</div></div></div>")
+    if len(vol_output_str):
+        output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>Volume Notification</h5><div class='table-responsive'><table class='table table-striped'><thead><tr><th>Volume Name</th><th>Use %</th><th>Notification Type</th><th>Updated Size</th></tr></thead><tbody>")
+        output_html += vol_output_str
+        output_html.append("</tbody></table></div></div></div>")
+    if len(lun_output_str):
+        output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>LUN Notification</h5><div class='table-responsive'><table class='table table-striped'><thead><tr><th>LUN Name</th><th>Use %</th><th>Notification Type</th><th>Updated Size</th></tr></thead><tbody>")
+        output_html += lun_output_str
+        output_html.append("</tbody></table></div></div></div>")
+    if len(snapshot_output_str):
+        output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>Snapshot Notification</h5><div class='table-responsive'><table class='table table-striped'><thead><tr><th>Snapshot Name</th><th>Volume Name</th><th>Snapshot Age</th><th>Space Freed Up</th><th>Status</th></tr></thead><tbody>")
+        output_html += snapshot_output_str
+        output_html.append("</tbody></table></div></div></div>")
+    if len(clone_output_str):
+        output_html += clone_output_str
+        
+    output_html = '\n'.join(output_html)
     
     
-    
-    SUBJECT = "FSX for NetApp ONTAP Monitoring Notification: AWS Lambda"
+    SUBJECT = "FSX for ONTAP Monitoring Notification: AWS Lambda"
     client = boto3.client('ses')
     try:
         response = client.send_email(
@@ -697,9 +759,8 @@ def sendEmail(email_requirements, clone_vol_details):
             },
             Message={
                 'Body': {
-                    'Text': {
-                        'Charset': 'UTF-8',
-                        'Data': output_str,
+                    'Html': {
+                        'Data': output_html,
                     },
                 },
                 'Subject': {
@@ -712,7 +773,7 @@ def sendEmail(email_requirements, clone_vol_details):
     except botocore.exceptions.ClientError as e:
         logger.info(e.response['Error']['Message'])
     else:
-        logger.info("Email sent!"),
+        logger.info("Email sent!")
 
 def getStorageCapacity(client_fsx, fsxId):
     try:
