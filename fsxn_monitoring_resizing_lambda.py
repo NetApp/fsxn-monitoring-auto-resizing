@@ -30,6 +30,9 @@ import boto3
 import botocore
 import paramiko
 import re
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 def lambda_handler(event, context):
     
@@ -690,7 +693,7 @@ def sendEmail(email_requirements, clone_vol_details):
     </style>
     """
     
-    sc_output_str.insert(0, styles)
+    output_html.insert(0, styles)
     
     
     for email in email_requirements:
@@ -726,7 +729,7 @@ def sendEmail(email_requirements, clone_vol_details):
             
         clone_output_str.append("</tbody></table></div></div></div>")
     
-    if len(sc_output_str):
+    if len(sc_output_str) > 1:
         output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>File System Storage Capacity Notification</h5>")
         output_html += sc_output_str
         output_html.append("</div></div></div>")
@@ -747,33 +750,74 @@ def sendEmail(email_requirements, clone_vol_details):
         
     output_html = '\n'.join(output_html)
     
-    
     SUBJECT = "FSX for ONTAP Monitoring Notification: AWS Lambda"
-    client = boto3.client('ses')
-    try:
-        response = client.send_email(
-            Destination={
-                'ToAddresses': [
-                    vars.recipient_email,
-                ],
-            },
-            Message={
-                'Body': {
-                    'Html': {
-                        'Data': output_html,
+    
+    if len(clone_vol_details) or len(sc_output_str) > 1 or len(vol_output_str) or len(lun_output_str) or len(snapshot_output_str) or len(clone_output_str):
+        if vars.internet_access == False:
+            
+            ssm = boto3.client('ssm')
+    
+            ssm_response = ssm.get_parameter(Name=vars.smtp_password_ssm_parameter, WithDecryption=True)
+            smtp_password = ssm_response['Parameter']['Value']
+            
+            ssm_response = ssm.get_parameter(Name=vars.smtp_username_ssm_parameter, WithDecryption=True)
+            smtp_username = ssm_response['Parameter']['Value']
+            
+            smtp_host = "email-smtp." + vars.smtp_region + ".amazonaws.com"
+            smtp_port = 587
+            
+            msg = MIMEMultipart('related')
+            msg['Subject'] = SUBJECT
+            msg['From'] = vars.sender_email
+            msg['To'] = vars.recipient_email
+        
+            # Attach the HTML content to the message
+            html_part = MIMEText(output_html, 'html')
+            msg.attach(html_part)
+            
+            try:
+                # Connect to the SMTP server using a VPC endpoint
+                smtp_conn = smtplib.SMTP(smtp_host, smtp_port)
+                smtp_conn.starttls()
+                smtp_conn.login(smtp_username, smtp_password)
+        
+                # Send the message via the SMTP server
+                smtp_conn.sendmail(vars.sender_email, vars.recipient_email, msg.as_string())
+        
+                # Disconnect from the SMTP server
+                smtp_conn.quit()
+        
+                print("Email sent!")
+                
+            except Exception as e:
+                print('Email sending failed: {}'.format(e))
+        
+        else:
+            client = boto3.client('ses')
+            try:
+                response = client.send_email(
+                    Destination={
+                        'ToAddresses': [
+                            vars.recipient_email,
+                        ],
                     },
-                },
-                'Subject': {
-                    'Charset': 'UTF-8',
-                    'Data': SUBJECT,
-                },
-            },
-            Source=vars.sender_email,
-        )
-    except botocore.exceptions.ClientError as e:
-        logger.info(e.response['Error']['Message'])
-    else:
-        logger.info("Email sent!")
+                    Message={
+                        'Body': {
+                            'Html': {
+                                'Data': output_html,
+                            },
+                        },
+                        'Subject': {
+                            'Charset': 'UTF-8',
+                            'Data': SUBJECT,
+                        },
+                    },
+                    Source=vars.sender_email,
+                )
+            except botocore.exceptions.ClientError as e:
+                logger.info(e.response['Error']['Message'])
+            else:
+                logger.info("Email sent!")
 
 def getStorageCapacity(client_fsx, fsxId):
     try:

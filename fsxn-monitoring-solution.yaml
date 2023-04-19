@@ -1,0 +1,1684 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Network Configuration"
+        Parameters:
+          - vpc
+          - privateSubnet1ID
+          - privateSubnet2ID
+      - Label: 
+          default: "FSx for ONTAP Configuration"
+        Parameters:
+          - fsxMgmtIp
+          - fsxId
+          - username
+          - fsxPassword
+          - resizeThreshold
+          - warnNotification
+          - enableSnapshotDeletion
+          - snapshotAgeThresholdInDays
+      - Label: 
+          default: "General Configuration"
+        Parameters:
+          - s3BucketName
+          - internetAccess
+          - existingSsmEndpoint
+          - existingFsxEndpoint
+          - existingSesEndpoint
+          - smtpUsername
+          - smtpPassword
+          - senderEmail
+          - recipientEmail
+          - lambdaScheduleExpression
+    ParameterLabels:
+      vpc:
+        default: "VPC:"
+      privateSubnet1ID:
+        default: "Private Subnet 1:"
+      privateSubnet2ID:
+        default: "Private Subnet 2:"
+      fsxMgmtIp:
+        default: "Management IP address"
+      fsxId:
+        default: "File System ID"
+      username:
+        default: "ONTAP Administrator Username"
+      fsxPassword:
+        default: "Password for ONTAP Administrator Account"
+      resizeThreshold:
+        default: "Resize Threshold (%)"
+      warnNotification:
+        default: "Enable Warning Notifications"
+      enableSnapshotDeletion:
+        default: "Enable Snapshot Deletion"
+      snapshotAgeThresholdInDays:
+        default: "Snapshot Age Threshold for Deletion (No. of Days)"
+      s3BucketName:
+        default: "S3 Bucket Name"
+      internetAccess:
+        default: "Does VPC have internet access?"
+      existingSsmEndpoint:
+        default: "Does SSM VPC Endpoint already exist for the selected VPC?"
+      existingSesEndpoint:
+        default: "Does SES VPC Endpoint already exist for the selected VPC?"
+      existingFsxEndpoint:
+        default: "Does FSx VPC Endpoint already exist for the selected VPC?"
+      smtpUsername:
+        default: "SMTP Username for AWS SES"
+      smtpPassword:
+        default: "SMTP Password for AWS SES"
+      senderEmail:
+        default: "Sender Email ID"
+      recipientEmail:
+        default: "Receiver Email ID"
+      lambdaScheduleExpression:
+        default: "Schedule Expression for frequency of running the solution"
+
+Parameters:
+  vpc:
+    Description: Choose the Id of the VPC.
+    Type: AWS::EC2::VPC::Id
+  privateSubnet1ID:
+    Description: Choose the Id of the private subnet 1 in Availability Zone 1.
+    Type: AWS::EC2::Subnet::Id
+  privateSubnet2ID:
+    Description: Choose the Id of the private subnet 2 in Availability Zone 2.
+    Type: AWS::EC2::Subnet::Id
+  s3BucketName:
+    Description: Enter the name of the S3 Bucket where paramiko.zip and requests.zip is uploaded. Ensure S3 key for paramiko.zip is paramiko.zip and for requests.zip is requests.zip.
+    Type: String
+  fsxMgmtIp:
+    Description: Enter the "Management endpoint - IP address" from the FSx for ONTAP console on AWS.
+    Type: String
+  fsxId:
+    Description: Enter the "File system ID" from the FSx for ONTAP console on AWS.
+    Type: String
+  username:
+    Description: Enter the FSx for ONTAP "ONTAP administrator username" from FSx for ONTAP console on AWS.
+    Type: String
+    Default: "fsxadmin"
+  resizeThreshold:
+    Description:  Enter the threshold percentage from 0-100. This threshold will be used to measure Storage Capacity, Volume and LUN usage and when the % use of any increases above this threshold, resize activity will occur.
+    Type: Number
+    Default: 90
+  senderEmail:
+    Description: Enter the email ID registered on SES that will be used by the lambda function to send notification alerts related to monitoring and resizing.
+    Type: String
+  recipientEmail:
+    Description: Enter the email ID on which you want to receive the alert notifications.
+    Type: String
+  fsxPassword:
+    Description: Enter the password set for ONTAP Administrator user for FSx for ONTAP.
+    Type: String
+    NoEcho: "true"
+  warnNotification:
+    Description: Set this varible to True to receive notification when Storage Capacity/Volume/LUN usage exceeds 75% but is less than threshold.
+    Type: String
+    AllowedValues: ["True", "False"]
+    Default: "True"
+  enableSnapshotDeletion:
+    Description: Set this variable to True to enable volume level snapshot deletion for snapshots older than the value specified in "Snapshot Age Threshold for Deletion (No. of Days)".
+    Type: String
+    AllowedValues: ["True", "False"]
+    Default: "True"
+  snapshotAgeThresholdInDays:
+    Description: Enter the number of days of volume level snapshots you want to retain. Any snapshots older than the value provided will be deleted and the same will be notified via email.
+    Type: Number
+    Default: 30
+  internetAccess:
+    Description: Set this variable to True if the VPC used for deploying this solution has access to internet. Set to False otherwise.
+    Type: String
+    AllowedValues: ["True", "False"]
+    Default: "False"
+  existingSesEndpoint:
+    Description: If internet access is not available, set this variable to True if the VPC Endpoint for SES already exists in the VPC. Set to False otherwise.
+    Type: String
+    AllowedValues: ["True", "False"]
+    Default: "True"
+  existingSsmEndpoint:
+    Description: If internet access is not available, set this variable to True if the VPC Endpoint for SSM already exists in the VPC. Set to False otherwise.
+    Type: String
+    AllowedValues: ["True", "False"]
+    Default: "True"
+  existingFsxEndpoint:
+    Description: If internet access is not available, set this variable to True if the VPC Endpoint for FSx already exists in the VPC. Set to False otherwise.
+    Type: String
+    AllowedValues: ["True", "False"]
+    Default: "True"
+  smtpUsername:
+    Description: If internet access is not available, enter the smtp username for AWS SES.
+    Type: String
+  smtpPassword:
+    Description: If internet access is not available, enter the smtp password for AWS SES.
+    Type: String
+    NoEcho: "true"
+  lambdaScheduleExpression:
+    Description: Self-trigger your target on an automated schedule using Cron or rate expressions. Cron expressions are in UTC. e.g. rate(1 day), cron(0 17 ? * MON-FRI *).
+    Type: String
+    Default: "rate(1 day)"
+      
+Conditions:
+  CreateVPCEndpoint: !Equals [!Ref internetAccess, "False"]
+  CreateSESEndpoint: !And
+    - !Equals [!Ref existingSesEndpoint, "False"]
+    - !Equals [!Ref internetAccess, "False"]
+  CreateSSMEndpoint: !And
+    - !Equals [!Ref existingSsmEndpoint, "False"]
+    - !Equals [!Ref internetAccess, "False"]
+  CreateFSXEndpoint: !And
+    - !Equals [!Ref existingFsxEndpoint, "False"]
+    - !Equals [!Ref internetAccess, "False"]
+  NotCreateVPCEndpoint: !Equals [!Ref internetAccess, "True"]
+
+Resources:
+
+  #Create VPC Endpoints & Security Groups
+  SESVPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateSESEndpoint
+    Properties:
+      GroupDescription: Security group for Lambda to access SES VPC endpoint
+      VpcId: !Ref vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref FsxMonitoringLambdaSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 587
+          ToPort: 587
+          SourceSecurityGroupId: !Ref FsxMonitoringLambdaSecurityGroup
+
+  SESVPCEndpoint:
+    Condition: CreateSESEndpoint
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.email-smtp"
+      VpcId: !Ref vpc
+      PrivateDnsEnabled: true
+      VpcEndpointType: Interface
+      SecurityGroupIds:
+        - !Ref SESVPCEndpointSecurityGroup
+      SubnetIds:
+        - !Ref privateSubnet1ID
+        - !Ref privateSubnet2ID
+  
+  FSxVPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateFSXEndpoint
+    Properties:
+      GroupDescription: Security group for Lambda to access FSx VPC endpoint
+      VpcId: !Ref vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref FsxMonitoringLambdaSecurityGroup
+
+  FSxVPCEndpoint:
+    Condition: CreateFSXEndpoint
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.fsx"
+      VpcId: !Ref vpc
+      PrivateDnsEnabled: true
+      VpcEndpointType: Interface
+      SecurityGroupIds:
+        - !Ref FSxVPCEndpointSecurityGroup
+      SubnetIds:
+        - !Ref privateSubnet1ID
+        - !Ref privateSubnet2ID
+
+  SSMVPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateSSMEndpoint
+    Properties:
+      GroupDescription: Security group for Lambda to access SSM VPC endpoint
+      VpcId: !Ref vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref FsxMonitoringLambdaSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref SecureStringConversionLambdaFunctionSecurityGroup
+
+  SSMVPCEndpoint:
+    Condition: CreateSSMEndpoint
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      VpcId: !Ref vpc
+      PrivateDnsEnabled: true
+      VpcEndpointType: Interface
+      SecurityGroupIds:
+        - !Ref SSMVPCEndpointSecurityGroup
+      SubnetIds:
+        - !Ref privateSubnet1ID
+        - !Ref privateSubnet2ID
+  
+
+  # LambdaExecutionRoleForVpcEndpoints:
+  #   Type: AWS::IAM::Role
+  #   Condition: CreateVPCEndpoint
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service:
+  #               - lambda.amazonaws.com
+  #           Action:
+  #             - sts:AssumeRole
+  #     Policies:
+  #       - PolicyName: LambdaExecutionPolicy
+  #         PolicyDocument:
+  #           Version: '2012-10-17'
+  #           Statement:
+  #             - Effect: Allow
+  #               Action: logs:CreateLogGroup
+  #               Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+  #             - Effect: Allow
+  #               Action:
+  #                 - logs:CreateLogStream
+  #                 - logs:PutLogEvents
+  #               Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+  #             - Effect: Allow
+  #               Action:
+  #                 - ec2:DescribeNetworkInterfaces
+  #                 - ec2:CreateNetworkInterface
+  #                 - ec2:DeleteNetworkInterface
+  #               Resource: "*"
+  #             - Effect: Allow
+  #               Action:
+  #                 - ec2:DescribeVpcEndpoints
+  #                 - ec2:CreateVpcEndpoint
+  #                 - ec2:DeleteVpcEndpoint
+  #               Resource: '*'
+
+  # CheckVPCEndpointsLambdaFunction:
+  #   Type: AWS::Lambda::Function
+  #   Condition: CreateVPCEndpoint
+  #   Properties:
+  #     Handler: index.handler
+  #     Role: !GetAtt LambdaExecutionRoleForVpcEndpoints.Arn
+  #     Runtime: python3.8
+  #     Timeout: 30
+  #     VpcConfig:
+  #       SecurityGroupIds:
+  #         - !Ref FsxMonitoringLambdaSecurityGroup
+  #       SubnetIds:
+  #         - !Ref privateSubnet1ID
+  #         - !Ref privateSubnet2ID
+  #     Code:
+  #       ZipFile: |
+  #         import boto3
+  #         import os
+  #         import logging	
+  #         logger = logging.getLogger()	
+  #         logger.setLevel(logging.INFO)
+  #         import cfnresponse
+  #         import time
+
+  #         def handler(event, context):
+  #             try:
+  #                 ec2 = boto3.client('ec2')
+  #                 vpc_id = os.environ['VPC_ID']
+  #                 region = os.environ['CURRENT_REGION']
+
+  #                 service_names = [f'com.amazonaws.{region}.fsx', f'com.amazonaws.{region}.email-smtp', f'com.amazonaws.{region}.ssm']
+  #                 existing_endpoints = ec2.describe_vpc_endpoints(Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}])['VpcEndpoints']
+
+
+  #                 if event['RequestType'] == 'Delete':
+  #                     for endpoint in existing_endpoints:
+  #                         if endpoint['ServiceName'] in service_names and 'CreatedBy' in endpoint['Tags'] and endpoint['Tags']['CreatedBy'] == 'FSxNMonitoringLambdaFunction':
+  #                             ec2.delete_vpc_endpoints(VpcEndpointIds=[endpoint['VpcEndpointId']])
+  #                 else:
+  #                     for service_name in service_names:
+  #                         if not any(endpoint['ServiceName'] == service_name for endpoint in existing_endpoints):
+  #                             log = service_name + " does not exist. Creating new VPC endpoint."	
+  #                             logger.info(log)
+                              
+  #                             if service_name == f'com.amazonaws.{region}.fsx':	
+  #                               security_group_id = os.environ['SECURITY_GROUP_FSX']	
+  #                             elif service_name == f'com.amazonaws.{region}.email-smtp':	
+  #                               security_group_id = os.environ['SECURITY_GROUP_SES']	
+  #                             elif service_name == f'com.amazonaws.{region}.ses':
+  #                               security_group_id = os.environ['SECURITY_GROUP_SSM']
+
+  #                             create_vpc_endpoint(ec2, vpc_id, service_name, security_group_id)
+  #                             time.sleep(2)
+
+  #                 cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+  #             except Exception as e:
+  #                 cfnresponse.send(event, context, cfnresponse.FAILED, {}, str(e))
+
+  #         def create_vpc_endpoint(ec2, vpc_id, service_name, security_group_id):
+              
+  #             subnet_ids = [os.environ['SUBNET_ID1'], os.environ['SUBNET_ID2']]
+
+  #             vpc_endpoint = ec2.create_vpc_endpoint(
+  #                 VpcId=vpc_id,
+  #                 ServiceName=service_name,
+  #                 VpcEndpointType='Interface',
+  #                 SubnetIds=subnet_ids,
+  #                 SecurityGroupIds=[security_group_id],
+  #                 TagSpecifications=[
+  #                     {
+  #                         'ResourceType': 'vpc-endpoint',
+  #                         'Tags': [
+  #                             {
+  #                                 'Key': 'CreatedBy',
+  #                                 'Value': 'FSxNMonitoringLambdaFunction'
+  #                             }
+  #                         ]
+  #                     }
+  #                 ]
+  #             )
+
+  #             logger.info(vpc_endpoint)
+
+  #     Environment:
+  #       Variables:
+  #         VPC_ID: !Ref vpc
+  #         SECURITY_GROUP_SES: !Ref SESVPCEndpointSecurityGroup
+  #         SECURITY_GROUP_FSX: !Ref FSxVPCEndpointSecurityGroup
+  #         SECURITY_GROUP_SSM: !Ref SSMVPCEndpointSecurityGroup
+  #         SUBNET_ID1: !Ref privateSubnet1ID
+  #         SUBNET_ID2: !Ref privateSubnet2ID
+  #         CURRENT_REGION: !Ref AWS::Region
+
+  # CustomVPCEndpointsLambdaResource:
+  #   Type: AWS::CloudFormation::CustomResource
+  #   Condition: CreateVPCEndpoint
+  #   DeletionPolicy: Retain
+  #   Properties:
+  #     ServiceToken: !GetAtt 'CheckVPCEndpointsLambdaFunction.Arn'
+
+  #Create SSM parameters for secure strings
+  FSxNPassword:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      Name: "/fsxn/password"
+      Description: "Password for FSxN"
+      Type: "String"
+      Value: !Ref fsxPassword
+
+  SmtpUsername:
+    Type: "AWS::SSM::Parameter"
+    Condition: CreateVPCEndpoint
+    Properties:
+      Name: "/smtp/username"
+      Description: "SMTP username for SES"
+      Type: "String"
+      Value: !Ref smtpUsername
+
+  SmtpPassword:
+    Type: "AWS::SSM::Parameter"
+    Condition: CreateVPCEndpoint
+    Properties:
+      Name: "/smtp/password"
+      Description: "SMTP password for SES"
+      Type: "String"
+      Value: !Ref smtpPassword
+
+  #Set SES Email
+  SESEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref senderEmail
+
+
+  #Security Group for SecureStringConversion Lambda function
+  SecureStringConversionLambdaFunctionSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Security group for the SecureStringConversionLambdaFunction"
+      VpcId: !Ref vpc
+      SecurityGroupEgress:
+        # - IpProtocol: "-1"
+        #   CidrIp: "0.0.0.0/0"
+        - IpProtocol: -1
+          FromPort: 0 
+          ToPort: 65535
+          CidrIp: '0.0.0.0/0'
+
+
+  #IAM role for secure string conversion Lambda function
+  SecureStringConversionLambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: SecureStringConversionLambdaRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              - Effect: "Allow"
+                Action:
+                  - "ssm:GetParameter"
+                  - "ssm:PutParameter"
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"                  
+
+                    
+  #Secure string converter lambda
+  CustomSecureStringConversionLambdaResource:
+    Type: AWS::CloudFormation::CustomResource
+    DeletionPolicy: Retain
+    Condition: CreateVPCEndpoint
+    DependsOn:
+      - FSxNPassword
+      - SmtpUsername
+      - SmtpPassword
+    Properties:
+      ServiceToken: !GetAtt 'SecureStringConversionLambdaFunction.Arn'
+
+  CustomSecureStringConversionLambdaResource1:
+    Type: AWS::CloudFormation::CustomResource
+    Condition: NotCreateVPCEndpoint
+    DeletionPolicy: Retain
+    DependsOn: FSxNPassword
+    Properties:
+      ServiceToken: !GetAtt 'SecureStringConversionLambdaFunction.Arn'
+
+
+  SecureStringConversionLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: "index.lambda_handler"
+      Timeout: 60
+      Runtime: "python3.9"
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecureStringConversionLambdaFunctionSecurityGroup
+        SubnetIds:
+          - !Ref privateSubnet1ID
+          - !Ref privateSubnet2ID
+      Environment:
+        Variables:
+          FSX_PARAMETER: "/fsxn/password"
+          SMTP_USERNAME_PARAMETER: !If [ CreateVPCEndpoint, "/smtp/username", "" ]
+          SMTP_PASSWORD_PARAMETER: !If [ CreateVPCEndpoint, "/smtp/password", "" ]
+          INTERNET_ACCESS: !Ref internetAccess
+      Role: !GetAtt SecureStringConversionLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          import time
+          import cfnresponse
+          
+          ssm = boto3.client('ssm')
+          
+          def lambda_handler(event, context):
+              responseData = {}
+              # Retrieve the plaintext value from the SSM parameter
+              fsx_parameter = os.environ['FSX_PARAMETER']
+              response = ssm.get_parameter(Name=fsx_parameter, WithDecryption=True)
+              plaintext_value = response['Parameter']['Value']
+              
+              # Convert the plaintext value to an encrypted SecureString
+              response = ssm.put_parameter(
+                  Name=fsx_parameter,
+                  Value=plaintext_value,
+                  Type='SecureString',
+                  Overwrite=True
+              )
+
+              time.sleep(1)
+              
+              if os.environ['INTERNET_ACCESS'] == 'False':
+                  # Retrieve the plaintext value from the SSM parameter
+                  smtp_username_parameter = os.environ['SMTP_USERNAME_PARAMETER']
+                  response = ssm.get_parameter(Name=smtp_username_parameter, WithDecryption=True)
+                  plaintext_value = response['Parameter']['Value']
+                  
+                  # Convert the plaintext value to an encrypted SecureString
+                  response = ssm.put_parameter(
+                      Name=smtp_username_parameter,
+                      Value=plaintext_value,
+                      Type='SecureString',
+                      Overwrite=True
+                  )
+
+                  time.sleep(1)
+
+
+                  # Retrieve the plaintext value from the SSM parameter
+                  smtp_password_parameter = os.environ['SMTP_PASSWORD_PARAMETER']
+                  response = ssm.get_parameter(Name=smtp_password_parameter, WithDecryption=True)
+                  plaintext_value = response['Parameter']['Value']
+                
+                  # Convert the plaintext value to an encrypted SecureString
+                  response = ssm.put_parameter(
+                      Name=smtp_password_parameter,
+                      Value=plaintext_value,
+                      Type='SecureString',
+                      Overwrite=True
+                  )
+
+              if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              else:
+                cfnresponse.send(event,context,cfnresponse.FAILED,responseData)
+
+              return
+
+
+  #IAM role used by Monitoring Lambda function
+  FsxMonitoringLambdaIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: FsxMonitoringLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - fsx:DescribeFileSystems
+                  - fsx:DescribeVolumes
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                Resource:
+                  - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*"
+                  - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              - Effect: Allow
+                Action:
+                  - fsx:UpdateVolume
+                Resource: !Sub "arn:aws:fsx:*:${AWS::AccountId}:volume/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::*"
+              - Effect: Allow
+                Action: 
+                  - fsx:UpdateFileSystem
+                Resource: !Sub "arn:aws:fsx:*:${AWS::AccountId}:file-system/*"
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                Resource:
+                  - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*"
+                  - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::*/*"
+              - Effect: Allow
+                Action:
+                  - s3-object-lambda:GetObject
+                  - s3-object-lambda:PutObject
+                  - s3-object-lambda:ListBucket
+                  - s3-object-lambda:GetObjectVersion
+                  - s3-object-lambda:ListBucketVersions
+                Resource:
+                  - !Sub "arn:aws:s3-object-lambda:${AWS::Region}:${AWS::AccountId}:accesspoint/*"
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*"
+
+
+  #Layers needed by Monitoring Lambda function
+  RequestsLambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - python3.9
+      Content:
+        S3Bucket: !Ref s3BucketName
+        S3Key: Requests.zip
+      Description: Python Requests module
+      LayerName: requests
+  
+  ParamikoLambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - python3.9
+      Content:
+        S3Bucket: !Ref s3BucketName
+        S3Key: Paramiko.zip
+      Description: Python Paramiko module
+      LayerName: paramiko
+      
+  #Security Group used by Monitoring Lambda function
+  FsxMonitoringLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow all traffic
+      VpcId: !Ref vpc
+      # SecurityGroupIngress:
+      #   - CidrIp: 0.0.0.0/0
+      #     IpProtocol: -1
+      SecurityGroupEgress:
+        # - CidrIp: 0.0.0.0/0
+        #   IpProtocol: -1
+        # - IpProtocol: 'tcp'
+        #   FromPort: 22 # Allow SSH traffic for Paramiko
+        #   ToPort: 22
+        #   CidrIp: !Sub "${fsxMgmtIp}/32"
+        # - IpProtocol: 'tcp'
+        #   FromPort: 1024 # Allow dynamic port range for Requests module
+        #   ToPort: 65535
+        #   CidrIp: !Sub "${fsxMgmtIp}/32"
+        # - IpProtocol: 'tcp'
+        #   FromPort: 587 # Allow SMTP traffic for SES
+        #   ToPort: 587
+        #   CidrIp: '0.0.0.0/0'
+        - IpProtocol: -1
+          FromPort: 0 
+          ToPort: 65535
+          CidrIp: '0.0.0.0/0'
+
+
+  #Create and setup Monitoring Lambda function
+  CustomFSxNMonitoringLambdaResource:
+    Type: AWS::CloudFormation::CustomResource
+    DeletionPolicy: Retain
+    Condition: CreateVPCEndpoint
+    DependsOn: CustomSecureStringConversionLambdaResource
+    Properties:
+      ServiceToken: !GetAtt 'FSxNMonitoringLambdaFunction.Arn'
+
+  CustomFSxNMonitoringLambdaResource1:
+    Type: AWS::CloudFormation::CustomResource
+    DeletionPolicy: Retain
+    Condition: NotCreateVPCEndpoint
+    DependsOn: CustomSecureStringConversionLambdaResource1
+    Properties:
+      ServiceToken: !GetAtt 'FSxNMonitoringLambdaFunction.Arn'
+
+  FSxNMonitoringLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Description: "Main function for monitoring and resizing FSx for ONTAP"
+      Timeout: 300
+      Role: !GetAtt 'FsxMonitoringLambdaIamRole.Arn'
+      Runtime: python3.9
+      Layers:
+        - !Ref RequestsLambdaLayer
+        - !Ref ParamikoLambdaLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref FsxMonitoringLambdaSecurityGroup
+        SubnetIds:
+          - !Ref privateSubnet1ID
+          - !Ref privateSubnet2ID
+      Environment:
+        Variables:
+          FSX_MGMT_IP: !Ref fsxMgmtIp
+          FSX_ID: !Ref fsxId
+          USERNAME: !Ref username
+          RESIZE_THRESHOLD: !Ref resizeThreshold
+          SENDER_EMAIL: !Ref senderEmail
+          RECIPIENT_EMAIL: !Ref recipientEmail
+          FSX_PASSWORD: !Sub '/fsxn/password'
+          WARN_NOTIFICATION: !Ref warnNotification
+          ENABLE_SNAPSHOT_DELETION: !Ref enableSnapshotDeletion
+          SNAPSHOT_AGE_THRESHOLD_IN_DAYS: !Ref snapshotAgeThresholdInDays
+          INTERNET_ACCESS: !Ref internetAccess
+          SMTP_USERNAME: '/smtp/username'
+          SMTP_PASSWORD: '/smtp/password'
+      Code:
+        ZipFile: |
+          import json
+          import requests
+          requests.packages.urllib3.disable_warnings() 
+          import base64
+          import logging
+          import os
+          import math
+          import time
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          logging.getLogger("paramiko").setLevel(logging.WARNING)
+          import boto3
+          import botocore
+          import paramiko
+          import re
+          import smtplib
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          from datetime import datetime, timezone
+          import cfnresponse
+
+          def lambda_handler(event, context):
+              response_data = {}
+
+              fsxMgmtIp = os.environ['FSX_MGMT_IP']
+              fsxId = os.environ['FSX_ID']
+              username = os.environ['USERNAME']
+              resize_threshold = int(os.environ['RESIZE_THRESHOLD'])
+              fsx_password_ssm_parameter = os.environ['FSX_PASSWORD']
+              warn_notification = os.environ['WARN_NOTIFICATION']
+              enable_snapshot_deletion = os.environ['ENABLE_SNAPSHOT_DELETION'] == 'true'
+              snapshot_age_threshold_in_days = int(os.environ['SNAPSHOT_AGE_THRESHOLD_IN_DAYS'])
+              
+              #retrieve fsxn password
+              ssm = boto3.client('ssm')
+              
+              ssm_response = ssm.get_parameter(Name=fsx_password_ssm_parameter, WithDecryption=True)
+              fsxn_password = ssm_response['Parameter']['Value']
+
+              vol_details = []
+              lun_details = []
+              snapshot_details = []
+              email_requirements = []
+              clone_vol_details = []
+              
+              #ssh to fsxn and get aggr1 capacity
+              ssh_client = paramiko.SSHClient()
+              ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh_client.connect(fsxMgmtIp, username=username, password=fsxn_password)
+              command = 'df -A -h'
+              stdin, stdout, stderr = ssh_client.exec_command(command)
+              aggr_output = stdout.read().decode().strip()
+              ssh_client.close()
+              
+              pattern = r'^aggr1\s+(\S+).*$'
+              match = re.search(pattern, aggr_output, re.MULTILINE)
+              if match:
+                  aggr_total = match.group(1)
+              else:
+                  print("aggr1 not found in output")
+              
+              pattern = r"aggr1\s+(\d+\.?\d*)GB"
+              match = re.search(pattern, aggr_output)
+              if match:
+                  aggr_total = float(match.group(1))
+              else:
+                  print("Total not found")
+
+              #initialize boto3 fsx
+              client_fsx = boto3.client('fsx')
+              
+              #get fsx storage capacity
+              storage_capacity = getStorageCapacity(client_fsx, str(fsxId))
+              
+              #initialize ontap api auth
+              auth_str = str(username) + ":" + str(fsxn_password)
+              auth_encoded = auth_str.encode("ascii")
+              auth_encoded = base64.b64encode(auth_encoded)
+              auth_encoded = auth_encoded.decode("utf-8")
+              headers = {
+                  'authorization': 'Basic {}'.format(auth_encoded),
+                  'content-type': "application/json",
+                  'accept': "application/json"
+              }
+              
+              
+              
+              #get lun details
+              url_lun = "https://{}/api/storage/luns".format(fsxMgmtIp)
+              response_lun = requests.get(url_lun, headers=headers, verify=False)
+
+              for i in range(len(response_lun.json()['records'])):
+                  lun_id = response_lun.json()['records'][i]['uuid']
+                  url_lun = "https://{}/api/storage/luns/{}".format(fsxMgmtIp,lun_id)
+                  response_lun_loop = requests.get(url_lun, headers=headers, verify=False)
+                  lun_details.append(
+                      {
+                          "name": response_lun_loop.json()['location']['logical_unit'], 
+                          "vol_name": response_lun_loop.json()['location']['volume']['name'],
+                          "vol_uuid": response_lun_loop.json()['location']['volume']['uuid'],
+                          "space_total": response_lun_loop.json()['space']['size'],
+                          "space_used": response_lun_loop.json()['space']['used'],
+                          "space_reserved": response_lun_loop.json()['space']['guarantee']['reserved']
+                      }
+                  )
+                  
+                  #check if LUN needs resizing and resize if allowed
+                  lun_per = (float(response_lun_loop.json()['space']['used'])/float(response_lun_loop.json()['space']['size']))*100 
+                  if(warn_notification and float(lun_per) > 75 and float(lun_per) < float(resize_threshold)):
+                      email_requirements.append(
+                          {
+                              "case": "lun_notification",
+                              "name": response_lun_loop.json()['location']['logical_unit'],
+                              "use_per": round(lun_per,2),
+                              "new_size": 0,
+                              "warn": False
+                          }
+                      )
+
+
+                  if(float(lun_per) > float(resize_threshold)):
+                      new_lun_size = float(response_lun_loop.json()['space']['size']) * 1.05
+                      new_lun_per = (float(response_lun_loop.json()['space']['used'])/float(new_lun_size))*100 
+                      while float(new_lun_per) > float(resize_threshold):
+                          new_lun_size = new_lun_size * 1.05
+                          new_lun_per = (float(response_lun_loop.json()['space']['used'])/float(new_lun_size))*100 
+                      new_lun_size = math.ceil(new_lun_size)
+                      
+                      #check if LUN is thick provisioned
+                      if(response_lun_loop.json()['space']['guarantee']['reserved'] == True):
+                          #check if vol size can accomodate new lun size
+                          lun_space_used = 0
+                          for lun in lun_details:
+                              if(lun['vol_name'] == response_lun_loop.json()['location']['volume']['name']):
+                                  if(lun['space_reserved'] == True):
+                                      lun_space_used += lun['space_total']
+                                  else:
+                                      lun_space_used += lun['space_used']
+
+                          if(response_lun_loop.json()['space']['guarantee']['reserved'] == True):
+                              lun_space_used = lun_space_used - float(response_lun_loop.json()['space']['size']) + new_lun_size
+                          else:          
+                              lun_space_used = lun_space_used - float(response_lun_loop.json()['space']['used']) + new_lun_size
+                          
+                          url = "https://{}/api/storage/volumes/{}?fields=*,guarantee".format(fsxMgmtIp,response_lun_loop.json()['location']['volume']['uuid'])
+                          response_vol = requests.get(url, headers=headers, verify=False)
+                          vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(response_vol.json()['space']['size']))*100 
+
+                          #update LUN size if vol size can accomodate
+                          if(float(lun_space_used * 1.05) < float(response_vol.json()['space']['size'])):
+                              data = { "space": { "size": new_lun_size}}
+                              url_lun_update = "https://{}/api/storage/luns/{}".format(fsxMgmtIp, lun_id)
+                              response_lun_update = requests.patch(url_lun_update, headers=headers, json=data, verify=False)
+                              try:
+                                  response_lun_update.raise_for_status()
+                              except requests.exceptions.HTTPError as e:
+                                  print("Error: " + str(e))
+                                  response_data = {"Status": "FAILED"}
+                              log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
+                              logger.info(log)
+                              email_requirements.append(
+                                  {
+                                      "case": "lun",
+                                      "name": response_lun_loop.json()['location']['logical_unit'],
+                                      "use_per": round(lun_per,2),
+                                      "new_size": new_lun_size,
+                                      "warn": False
+                                  }
+                              )
+                          #update the volume size followed by lun size
+                          else:
+                              new_vol_size = float(response_vol.json()['space']['size']) * 1.05
+                              while(float(lun_space_used) > new_vol_size):
+                                  new_vol_size *= 1.05
+                              new_vol_size_mb = new_vol_size/(1024*1024)
+                              new_vol_size_mb = math.ceil(new_vol_size_mb)
+
+                              #Volume is thick provisioned
+                              if(response_vol.json()['guarantee']['type'] == "volume"):
+                                  #check if sc can accomodate new vol size
+                                  sc_space_used = 0
+                                  vol_details = getVolDetails(headers, [], fsxMgmtIp)
+                                  for vol in vol_details:
+                                      if(vol['guarantee'] == "volume"):
+                                          sc_space_used += vol['space_total']
+                                      else:
+                                          sc_space_used += vol['space_used']
+                                  
+                                  if(response_vol.json()['guarantee']['type'] == "volume"):
+                                      sc_space_used = sc_space_used - response_vol.json()['space']['size'] + new_vol_size
+                                  else:
+                                      sc_space_used = sc_space_used - response_vol.json()['space']['used'] + new_vol_size
+                                  
+                                  sc_space_used = sc_space_used/(1024*1024*1024)
+
+                                  #update vol size if sc can accomodate
+                                  if(float(sc_space_used * 1.1) < float(aggr_total)):
+                                      #update vol
+                                      all_vol_details = client_fsx.describe_volumes()
+                                      for vol in all_vol_details['Volumes']:
+                                          if(vol['OntapConfiguration']['UUID'] == response_lun_loop.json()['location']['volume']['uuid']):
+                                              vol_id = vol['VolumeId']
+                                      update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
+                                      time.sleep(30)
+                                      log = "LUN space used for LUN {} is greater than {}%. However volume size for volume {} cannot support increase in LUN size. Hence increasing volume size to {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold, response_lun_loop.json()['location']['volume']['name'], round((new_vol_size_mb/1024),2))                
+                                      logger.info(log)
+                                      email_requirements.append(
+                                          {
+                                              "case": "vol",
+                                              "name": response_vol.json()['name'],
+                                              "use_per": round(vol_per,2),
+                                              "new_size": new_vol_size_mb,
+                                              "warn": False
+                                          }
+                                      )
+
+                                      #update lun
+                                      data = { "space": { "size": new_lun_size}}
+                                      url_lun_update = "https://{}/api/storage/luns/{}".format(fsxMgmtIp, lun_id)
+                                      response_lun_update = requests.patch(url_lun_update, headers=headers, json=data, verify=False)
+                                      try:
+                                          response_lun_update.raise_for_status()
+                                      except requests.exceptions.HTTPError as e:
+                                          print("Error: " + str(e))
+                                          response_data = {"Status": "FAILED"}
+                                      log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
+                                      logger.info(log)
+                                      email_requirements.append(
+                                          {
+                                              "case": "lun",
+                                              "name": response_lun_loop.json()['location']['logical_unit'],
+                                              "use_per": round(lun_per,2),
+                                              "new_size": new_lun_size,
+                                              "warn": False
+                                          }
+                                      )
+                                  #else update sc followed by vol followed by lun
+                                  else:
+                                      #update sc
+                                      size = float(storage_capacity) * 1.1
+                                      while float(size) < float(sc_space_used):
+                                          size = size * 1.1
+                                      size = math.ceil(size)
+                                      update = client_fsx.update_file_system(FileSystemId = fsxId, StorageCapacity = size)
+                                      time.sleep(30)
+                                      log = "Volume {} needs to be resized. However Storage capacity is out of space. Hence, File System Storage Capacity resized to: {} GB".format(response_lun_loop.json()['location']['volume']['name'], size)
+                                      logger.info(log)
+                                      email_requirements.append(
+                                          {
+                                              "case": "sc",
+                                              "name": response_lun_loop.json()['location']['volume']['name'],
+                                              "use_per": resize_threshold,
+                                              "new_size": size,
+                                              "warn": True
+                                          }
+                                      )
+
+                                      # #update vol
+                                      # all_vol_details = client_fsx.describe_volumes()
+                                      # for vol in all_vol_details['Volumes']:
+                                      #     if(vol['OntapConfiguration']['UUID'] == response_lun_loop.json()['location']['volume']['uuid']):
+                                      #         vol_id = vol['VolumeId']
+                                      # update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
+                                      # time.sleep(30)
+                                      # log = "LUN space used for LUN {} is greater than {}%. However volume size for volume {} cannot support increase in LUN size. Hence increasing volume size to {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold, response_lun_loop.json()['location']['volume']['name'], round(new_vol_size_mb/1024,2))                
+                                      # sendEmail("vol", response_vol.json()['name'], resize_threshold, new_vol_size_mb)
+                                      # logger.info(log)
+
+                                      # #update lun
+                                      # data = { "space": { "size": new_lun_size}}
+                                      # url_lun_update = "https://{}/api/storage/luns/{}".format(fsxMgmtIp, lun_id)
+                                      # response_lun_update = requests.patch(url_lun_update, headers=headers, json=data, verify=False)
+                                      # try:
+                                      #     response_lun_update.raise_for_status()
+                                      # except requests.exceptions.HTTPError as e:
+                                      #     return {
+                                      #         'statusCode': 400,
+                                      #         'body': "Error: " + str(e) 
+                                      #     }
+                                      # log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
+                                      # sendEmail("lun", response_lun_loop.json()['location']['logical_unit'], resize_threshold, new_lun_size)
+                                      # logger.info(log)
+                              #volume is thin provisioned
+                              else:
+                                  #update vol
+                                  all_vol_details = client_fsx.describe_volumes()
+                                  for vol in all_vol_details['Volumes']:
+                                      if(vol['OntapConfiguration']['UUID'] == response_lun_loop.json()['location']['volume']['uuid']):
+                                          vol_id = vol['VolumeId']
+                                  update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
+                                  time.sleep(30)
+                                  log = "LUN space used for LUN {} is greater than {}%. However volume size for volume {} cannot support increase in LUN size. Hence increasing volume size to {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold, response_lun_loop.json()['location']['volume']['name'], round(new_vol_size_mb/1024,2))                
+                                  logger.info(log)
+                                  email_requirements.append(
+                                      {
+                                          "case": "vol",
+                                          "name": response_vol.json()['name'],
+                                          "use_per": round(vol_per,2),
+                                          "new_size": new_vol_size_mb,
+                                          "warn": False
+                                      }
+                                  )
+
+                                  #update lun
+                                  data = { "space": { "size": new_lun_size}}
+                                  url_lun_update = "https://{}/api/storage/luns/{}".format(fsxMgmtIp, lun_id)
+                                  response_lun_update = requests.patch(url_lun_update, headers=headers, json=data, verify=False)
+                                  try:
+                                      response_lun_update.raise_for_status()
+                                  except requests.exceptions.HTTPError as e:
+                                      print("Error: " + str(e))
+                                      response_data = {"Status": "FAILED"}
+                                  log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
+                                  logger.info(log)
+                                  email_requirements.append(
+                                      {
+                                          "case": "lun",
+                                          "name": response_lun_loop.json()['location']['logical_unit'],
+                                          "use_per": round(lun_per,2),
+                                          "new_size": new_lun_size,
+                                          "warn": False
+                                      }
+                                  )
+
+                      #LUN is thin provisioned
+                      else:
+                          #update lun
+                          data = { "space": { "size": new_lun_size}}
+                          url_lun_update = "https://{}/api/storage/luns/{}".format(fsxMgmtIp, lun_id)
+                          response_lun_update = requests.patch(url_lun_update, headers=headers, json=data, verify=False)
+                          try:
+                              response_lun_update.raise_for_status()
+                          except requests.exceptions.HTTPError as e:
+                              print("Error: " + str(e))
+                              response_data = {"Status": "FAILED"}
+                          log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
+                          logger.info(log)
+                          email_requirements.append(
+                              {
+                                  "case": "lun",
+                                  "name": response_lun_loop.json()['location']['logical_unit'],
+                                  "use_per": round(lun_per,2),
+                                  "new_size": new_lun_size,
+                                  "warn": False
+                              }
+                          )
+                              
+
+                  else:
+                      log = "LUN space used by LUN {} is less than {}%. LUN Size Used = {}%".format(response_lun_loop.json()['location']['logical_unit'], resize_threshold, round(lun_per,2))
+                      logger.info(log)
+
+          
+            
+              #get volume details
+              url = "https://{}/api/storage/volumes".format(fsxMgmtIp)
+              response = requests.get(url, headers=headers, verify=False)
+              
+              for i in range(len(response.json()['records'])):
+                  temp = response.json()['records'][i]['uuid']
+                  url = "https://{}/api/storage/volumes/{}?fields=*,guarantee,clone.is_flexclone,clone.parent_snapshot.name".format(fsxMgmtIp,temp)
+                  response_vol = requests.get(url, headers=headers, verify=False)
+                  if(response_vol.json()["clone"]["is_flexclone"]):
+                      vol_details.append(
+                          {
+                              "name": response_vol.json()['name'], 
+                              "uuid": response.json()['records'][i]['uuid'],
+                              "space_total": response_vol.json()['space']['size'],
+                              "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
+                              "guarantee": response_vol.json()['guarantee']['type'],
+                              "is_flexclone": True,
+                              "parent_snapshot": response_vol.json()['clone']['parent_snapshot']['name']
+                          }
+                      )
+                  else:
+                      vol_details.append(
+                          {
+                              "name": response_vol.json()['name'], 
+                              "uuid": response.json()['records'][i]['uuid'],
+                              "space_total": response_vol.json()['space']['size'],
+                              "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
+                              "guarantee": response_vol.json()['guarantee']['type'],
+                              "is_flexclone": False,
+                              "parent_snapshot": ""
+                          }
+                      )
+                  
+                  #check if volume needs resizing and resize if allowed and send email
+                  vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(response_vol.json()['space']['size']))*100 
+                  if(warn_notification and float(vol_per) > 75 and float(vol_per) < float(resize_threshold)):
+                      email_requirements.append(
+                          {
+                              "case": "vol_notification",
+                              "name": response_vol.json()['name'],
+                              "use_per": round(vol_per,2),
+                              "new_size": 0,
+                              "warn": False
+                          }
+                      )
+                  if(float(vol_per) > float(resize_threshold)):
+                      new_vol_size = float(response_vol.json()['space']['size']) * 1.05
+                      new_vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(new_vol_size))*100 
+                      while float(new_vol_per) > float(resize_threshold):
+                          new_vol_size = new_vol_size * 1.05
+                          new_vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(new_vol_size))*100 
+                      new_vol_size_mb = new_vol_size/(1024*1024)
+                      new_vol_size_mb = math.ceil(new_vol_size_mb)
+
+                      #thick provisioned volume
+                      if(response_vol.json()['guarantee']['type'] == "volume"):
+
+                          #check if sc can accomodate new vol size
+                          sc_space_used = 0
+                          vol_details = getVolDetails(headers, [], fsxMgmtIp)
+                          for vol in vol_details:
+                              if(vol['guarantee'] == "volume"):
+                                  sc_space_used += vol['space_total']
+                              else:
+                                  sc_space_used += (vol['space_used'])
+                          
+                          if(response_vol.json()['guarantee']['type'] == "volume"):
+                              sc_space_used = sc_space_used - response_vol.json()['space']['size'] + new_vol_size
+                          else:
+                              sc_space_used = sc_space_used - response_vol.json()['space']['used'] + new_vol_size
+                          sc_space_used = sc_space_used/(1024*1024*1024)
+                          #update vol size if sc can accomodate
+                          if(float(sc_space_used * 1.1) < float(aggr_total)):
+                              #update vol
+                              all_vol_details = client_fsx.describe_volumes()
+                              for vol in all_vol_details['Volumes']:
+                                  if(vol['OntapConfiguration']['UUID'] == response_vol.json()['uuid']):
+                                      vol_id = vol['VolumeId']
+                              update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
+                              log = "Volume space used for volume {} is greater than {}%. Volume resized to: {} GB".format(response_vol.json()['name'], resize_threshold, round(new_vol_size_mb/1024,2))
+                              logger.info(log)
+                              email_requirements.append(
+                                  {
+                                      "case": "vol",
+                                      "name": response_vol.json()['name'],
+                                      "use_per": round(vol_per,2),
+                                      "new_size": new_vol_size_mb,
+                                      "warn": False
+                                  }
+                              )
+                          #update sc followed by vol
+                          else:
+                              #update sc
+                              size = float(storage_capacity) * 1.1
+                              while float(size) < float(sc_space_used):
+                                  size = size * 1.1
+                              size = math.ceil(size)
+                              update = client_fsx.update_file_system(FileSystemId = fsxId, StorageCapacity = size)
+                              time.sleep(30)
+                              log = "Volume {} needs to be resized. However Storage capacity is out of space. Hence, File System Storage Capacity resized to: {} GB".format(response_vol.json()['name'], size)
+                              logger.info(log)
+                              email_requirements.append(
+                                  {
+                                      "case": "sc",
+                                      "name": response_vol.json()['name'],
+                                      "use_per": resize_threshold,
+                                      "new_size": size,
+                                      "warn": True
+                                  }
+                              )
+
+                              #update vol
+                              # all_vol_details = client_fsx.describe_volumes()
+                              # for vol in all_vol_details['Volumes']:
+                              #     if(vol['OntapConfiguration']['UUID'] == response_vol.json()['uuid']):
+                              #         vol_id = vol['VolumeId']
+                              # update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
+                              # log = "Volume space used for volume {} is greater than {}%. Volume resized to: {} GB".format(response_vol.json()['name'], resize_threshold, round(new_vol_size_mb/1024,2))
+                              # sendEmail("vol", response_vol.json()['name'], resize_threshold, new_vol_size_mb)
+                              # logger.info(log)
+                      #thin provisioned volume
+                      else:
+                          #update vol
+                          all_vol_details = client_fsx.describe_volumes()
+                          for vol in all_vol_details['Volumes']:
+                              if(vol['OntapConfiguration']['UUID'] == response_vol.json()['uuid']):
+                                  vol_id = vol['VolumeId']
+                          update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
+                          log = "Volume space used for volume {} is greater than {}%. Volume resized to: {} GB".format(response_vol.json()['name'], resize_threshold, round(new_vol_size_mb/1024,2))
+                          logger.info(log)
+                          email_requirements.append(
+                              {
+                                  "case": "vol",
+                                  "name": response_vol.json()['name'],
+                                  "use_per": round(vol_per,2),
+                                  "new_size": new_vol_size_mb,
+                                  "warn": False
+                              }
+                          )
+                      
+                  else:
+                      log = "Volume space used by volume {} is less than {}%. Volume Size Used = {}%".format(response_vol.json()['name'], resize_threshold, round(vol_per,2))
+                      logger.info(log)
+              
+              
+              #calculate % storage capacity used
+              total_space_used = 0
+              for vol in vol_details:
+                  if(vol['guarantee'] == "volume"):
+                      total_space_used += vol['space_total']
+                  else:
+                      total_space_used += vol['space_used']
+              total_space_used = total_space_used/(1024*1024*1024)
+              sc_used_per = (float(total_space_used)/float(aggr_total))*100
+
+              if(warn_notification and int(sc_used_per * 1.1) > 75 and int(sc_used_per * 1.1) < int(resize_threshold)):
+                  email_requirements.append(
+                      {
+                          "case": "sc_notification",
+                          "name": "null",
+                          "use_per": resize_threshold,
+                          "new_size": 0,
+                          "warn": False
+                      }
+                  )
+              if int(sc_used_per * 1.1) > int(resize_threshold):
+                  size = float(aggr_total) * 1.1
+                  size = float(storage_capacity) + (float(size) - float(aggr_total))
+                  if(float(size) < 1.1*float(storage_capacity)):
+                      size = float(storage_capacity) * 1.1
+                      while float(size) < float(storage_capacity):
+                          size *= 1.1 
+                  size = math.ceil(size)
+                  update = client_fsx.update_file_system(FileSystemId = fsxId, StorageCapacity = size)
+                  log = "Total volume space used is greater than {}%. File System Storage Capacity resized to: {} GB".format(resize_threshold,size)
+                  logger.info(log)
+                  email_requirements.append(
+                      {
+                          "case": "sc",
+                          "name": "null",
+                          "use_per": resize_threshold,
+                          "new_size": size,
+                          "warn": False
+                      }
+                  )
+              
+              else:
+                  log = "Total volume space used is less than {}%. Storage Capacity = {} GB, Total volume Size Used = {}%".format(resize_threshold, storage_capacity, round(sc_used_per,2))
+                  logger.info(log)
+
+              
+              #Get snapshot details
+              if(enable_snapshot_deletion):
+                  snapshot_details = getSnapshotDetails(headers, vol_details, fsxMgmtIp, snapshot_details)
+                  for snapshot in snapshot_details:
+                      ssh_client = paramiko.SSHClient()
+                      ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                      ssh_client.connect(fsxMgmtIp, username=username, password=fsxn_password)
+                      command = 'snapshot show -volume ' + snapshot["vol_name"] + ' -snapshot ' + snapshot["name"] + ' -fields create-time'
+                      stdin, stdout, stderr = ssh_client.exec_command(command)
+                      ss_create_time_output = stdout.read().decode().strip()
+                      command = 'snapshot show -volume ' + snapshot["vol_name"] + ' -snapshot ' + snapshot["name"] + ' -fields size'
+                      stdin, stdout, stderr = ssh_client.exec_command(command)
+                      ss_size_output = stdout.read().decode().strip()
+                      ssh_client.close()
+                      
+                      # Extract the create-time value using regular expression
+                      match = re.search(r'\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+', ss_create_time_output)
+                      if match:
+                          create_time_str = match.group(0)
+                      else:
+                          print("Cannot find create-time value in output")
+                      
+                      try:
+                          create_time = datetime.strptime(create_time_str, '%a %b %d %H:%M:%S %Y').replace(tzinfo=timezone.utc)
+                          
+                          # Convert the create-time string to datetime object
+                          create_time = datetime.strptime(create_time_str, '%a %b %d %H:%M:%S %Y').replace(tzinfo=timezone.utc)
+                          
+                          # Calculate how old the snapshot is in days
+                          age_days = (datetime.now(timezone.utc) - create_time).days
+                          snapshot["age_in_days"] = int(age_days)
+                              
+                      except ValueError as e:
+                          print(f"Error parsing create-time value: {create_time_str}")
+                          response_data = {"Status": "FAILED"}
+                          
+                      try:
+                          # Extract the size value from the output
+                          rows = ss_size_output.split("\n")
+                          last_row = rows[-1].split()
+                          size_str = last_row[3]
+                          
+                          # Extract the unit from the size string (i.e., the last two characters)
+                          unit = size_str[-2:].upper()
+                          
+                          # Convert the size value to an integer
+                          size_value = float(size_str[:-2])
+                          
+                          # Define a dictionary to map units to conversion factors
+                          unit_map = {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
+                          
+                          # Check if the unit is valid and convert the size value to bytes
+                          if unit in unit_map:
+                              size_bytes = size_value * unit_map[unit]
+                              snapshot["size_in_bytes"] = size_bytes
+                          else:
+                              print("Invalid unit")
+
+                          #delete snapshot if older than threshold
+                          if(int(snapshot["age_in_days"]) > snapshot_age_threshold_in_days):
+                              url = "https://{}/api/storage/volumes/{}/snapshots/{}".format(fsxMgmtIp, snapshot["vol_uuid"], snapshot["uuid"])
+                              response_ss_delete = requests.delete(url, headers=headers, verify=False)
+                              log = "Snapshot {} for volume {} has been deleted as it is {} days old which is above the threshold of {} days. ".format(snapshot["name"], snapshot["vol_name"], int(snapshot["age_in_days"]), snapshot_age_threshold_in_days)
+                              logger.info(log)
+                              email_requirements.append(
+                                  {
+                                      "case": "snapshot_delete",
+                                      "name": snapshot,
+                                      "use_per": snapshot["vol_name"],
+                                      "new_size": int(age_days),
+                                      "warn": False
+                                  }
+                              )
+
+                      except ValueError as e:
+                          print(f"Error parsing size value: {size_str}")
+                          response_data = {"Status": "FAILED"}
+              
+              #populate flexclone details
+              for vol in vol_details:
+                  if(vol["is_flexclone"]):
+                      for snapshot in snapshot_details:
+                          if(vol["parent_snapshot"] == snapshot["name"]):
+                              clone_vol_details.append(
+                                  {
+                                      "name": snapshot["vol_name"],
+                                      "parent_snapshot": vol["parent_snapshot"],
+                                      "snapshot_size": float(snapshot["size_in_bytes"])/1024
+                                  }
+                              )
+              #send consolidated email
+              sendEmail(email_requirements, clone_vol_details)
+
+              if response_data == {}:
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              else:
+                cfnresponse.send(event,context,cfnresponse.FAILED,{})
+
+              
+
+              return
+
+          def sendEmail(email_requirements, clone_vol_details):
+              lun_output_str = []
+              vol_output_str = []
+              sc_output_str = []
+              snapshot_output_str = []
+              clone_output_str = []
+              output_html = ["<h1>FSx for ONTAP Monitoring</h1><br>"]
+
+              internet_access = os.environ['INTERNET_ACCESS'] == 'True'
+              sender_email = os.environ['SENDER_EMAIL']
+              recipient_email = os.environ['RECIPIENT_EMAIL']
+              
+              
+              # Define inline styles
+              styles = """
+              <style>
+                  .card {
+                      border: 1px solid #ccc;
+                      border-radius: 5px;
+                      box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+                      margin-bottom: 1rem;
+                  }
+                  .card-body {
+                      padding: 1rem;
+                  }
+                  .card-title {
+                      margin-bottom: 1rem;
+                  }
+                  .card-text {
+                      margin-bottom: 0.5rem;
+                  }
+                  table {
+                      border-collapse: collapse;
+                      width: 100%;
+                  }
+                  th, td {
+                      padding: 0.5rem;
+                      text-align: left;
+                  }
+                  th {
+                      background-color: #f2f2f2;
+                  }
+              </style>
+              """
+              
+              output_html.insert(0, styles)
+              
+              
+              for email in email_requirements:
+                  case = email["case"]
+                  name = email["name"]
+                  use_per = email["use_per"]
+                  new_size = email["new_size"]
+                  warn = email["warn"]
+
+                  if(case == "lun"):
+                      lun_output_str.append("<tr><td>{}</td><td>{}%</td><td style='color: red;'>{}</td><td>{}GB</td></tr>".format(name, use_per, "Resize", round(new_size/(1024*1024*1024),2)))
+                  elif(case == "vol"):
+                      vol_output_str.append("<tr><td>{}</td><td>{}%</td><td style='color: red;'>{}</td><td>{}GB</td></tr>".format(name, use_per, "Resize", round(new_size/1024,2)))
+                  elif(case == "sc" and warn == False):
+                      sc_output_str.append("<p class='card-text'>Storage Capacity used is greater than {}%. File System Storage Capacity resized to: {} GB</p>".format(use_per , new_size))
+                  elif(case == "sc" and warn == True):
+                      sc_output_str.append("<p class='card-text'>Volume {} needs to be resized. However Storage capacity is out of space. Hence, File System Storage Capacity resized to: {} GB. Please run the automation again to update the volume once storage capacity update is completed successfully.</p>".format(name, new_size))
+                  elif(case == "lun_notification"):
+                      lun_output_str.append("<tr><td>{}</td><td>{}%</td><td style='color: orange;'>{}</td><td></td></tr>".format(name, use_per, "Warning"))
+                  elif(case == "vol_notification"):
+                      vol_output_str.append("<tr><td>{}</td><td>{}%</td><td style='color: orange;'>{}</td><td></td></tr>".format(name, use_per, "Warning"))
+                  elif(case == "sc_notification"):
+                      sc_output_str.append("<p class='card-text'>Storage Capacity used is greater than 75%. File System Storage Capacity will be resized once it crosses {}%</p>".format(use_per))
+                  elif(case == "snapshot_delete"):
+                      snapshot_output_str.append("<tr><td>{}</td><td>{}</td><td>{} day</td><td>{}KB</td><td style='color: red;'>{}</td></tr>".format(name["name"], use_per, new_size, int(int(name["size_in_bytes"])/1024), "Deleted"))
+              
+              if(len(clone_vol_details)):
+                  #add clone vol details to output string
+                  clone_output_str.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>Clone Information</h5><div class='table-responsive'><table class='table table-striped'><thead><tr><th>Volume Name</th><th>Parent Snapshot</th><th>Snapshot Size</th></tr></thead><tbody>")
+                  
+                  for clone in clone_vol_details:
+                      clone_output_str.append("<tr><td>{}</td><td>{}</td><td>{}</td></tr>".format(clone["name"], clone["parent_snapshot"], str(clone["snapshot_size"]) + "KB"))
+                      
+                  clone_output_str.append("</tbody></table></div></div></div>")
+              
+              if len(sc_output_str) > 1:
+                  output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>File System Storage Capacity Notification</h5>")
+                  output_html += sc_output_str
+                  output_html.append("</div></div></div>")
+              if len(vol_output_str):
+                  output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>Volume Notification</h5><div class='table-responsive'><table class='table table-striped'><thead><tr><th>Volume Name</th><th>Use %</th><th>Notification Type</th><th>Updated Size</th></tr></thead><tbody>")
+                  output_html += vol_output_str
+                  output_html.append("</tbody></table></div></div></div>")
+              if len(lun_output_str):
+                  output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>LUN Notification</h5><div class='table-responsive'><table class='table table-striped'><thead><tr><th>LUN Name</th><th>Use %</th><th>Notification Type</th><th>Updated Size</th></tr></thead><tbody>")
+                  output_html += lun_output_str
+                  output_html.append("</tbody></table></div></div></div>")
+              if len(snapshot_output_str):
+                  output_html.append("<div class='card mb-3'><div class='card-body'><h5 class='card-title'>Snapshot Notification</h5><div class='table-responsive'><table class='table table-striped'><thead><tr><th>Snapshot Name</th><th>Volume Name</th><th>Snapshot Age</th><th>Space Freed Up</th><th>Status</th></tr></thead><tbody>")
+                  output_html += snapshot_output_str
+                  output_html.append("</tbody></table></div></div></div>")
+              if len(clone_output_str):
+                  output_html += clone_output_str
+                  
+              output_html = '\n'.join(output_html)
+              
+              SUBJECT = "FSX for ONTAP Monitoring Notification: AWS Lambda"
+              
+              if len(clone_vol_details) or len(sc_output_str) > 1 or len(vol_output_str) or len(lun_output_str) or len(snapshot_output_str) or len(clone_output_str):
+                  if internet_access == False:
+
+                      smtp_region = os.environ['AWS_REGION']
+                      smtp_username_ssm_parameter = os.environ['SMTP_USERNAME']
+                      smtp_password_ssm_parameter = os.environ['SMTP_PASSWORD']
+
+                      ssm = boto3.client('ssm')
+              
+                      ssm_response = ssm.get_parameter(Name=smtp_password_ssm_parameter, WithDecryption=True)
+                      smtp_password = ssm_response['Parameter']['Value']
+                      
+                      ssm_response = ssm.get_parameter(Name=smtp_username_ssm_parameter, WithDecryption=True)
+                      smtp_username = ssm_response['Parameter']['Value']
+                      
+                      smtp_host = "email-smtp." + smtp_region + ".amazonaws.com"
+                      smtp_port = 587
+                      
+                      msg = MIMEMultipart('related')
+                      msg['Subject'] = SUBJECT
+                      msg['From'] = sender_email
+                      msg['To'] = recipient_email
+                  
+                      # Attach the HTML content to the message
+                      html_part = MIMEText(output_html, 'html')
+                      msg.attach(html_part)
+                      
+                      try:
+                          # Connect to the SMTP server using a VPC endpoint
+                          smtp_conn = smtplib.SMTP(smtp_host, smtp_port)
+                          smtp_conn.starttls()
+                          smtp_conn.login(smtp_username, smtp_password)
+                  
+                          # Send the message via the SMTP server
+                          smtp_conn.sendmail(sender_email, recipient_email, msg.as_string())
+                  
+                          # Disconnect from the SMTP server
+                          smtp_conn.quit()
+                  
+                          print("Email sent!")
+                          
+                      except Exception as e:
+                          print('Email sending failed: {}'.format(e))
+                  
+                  else:
+                      client = boto3.client('ses')
+                      try:
+                          response = client.send_email(
+                              Destination={
+                                  'ToAddresses': [
+                                      recipient_email,
+                                  ],
+                              },
+                              Message={
+                                  'Body': {
+                                      'Html': {
+                                          'Data': output_html,
+                                      },
+                                  },
+                                  'Subject': {
+                                      'Charset': 'UTF-8',
+                                      'Data': SUBJECT,
+                                  },
+                              },
+                              Source=sender_email,
+                          )
+                      except botocore.exceptions.ClientError as e:
+                          logger.info(e.response['Error']['Message'])
+                      else:
+                          logger.info("Email sent!")
+
+          def getStorageCapacity(client_fsx, fsxId):
+              try:
+                  response_fsx = client_fsx.describe_file_systems(FileSystemIds=[str(fsxId)])
+                  storage_capacity = str(response_fsx['FileSystems'][0]['StorageCapacity'])
+                  if storage_capacity == "":
+                      return {
+                          'statusCode': 400,
+                          'body': "Storage Capacity Not Retrieved"
+                      }
+                  else:
+                      return storage_capacity
+              except botocore.exceptions.ClientError as e:
+                  logger.info("Error Occurred while invoking FSX describe_file_systems: {}".format(e))
+              except botocore.exceptions.ParamValidationError as error:
+                  logger.info("The parameters you provided are incorrect: {}".format(error))
+
+          def getVolDetails(headers, vol_details, fsxMgmtIp):
+              url = "https://{}/api/storage/volumes".format(fsxMgmtIp)
+              response = requests.get(url, headers=headers, verify=False)
+              
+              for i in range(len(response.json()['records'])):
+                  temp = response.json()['records'][i]['uuid']
+                  url = "https://{}/api/storage/volumes/{}?fields=*,guarantee,clone.is_flexclone,clone.parent_snapshot.name".format(fsxMgmtIp,temp)
+                  response_vol = requests.get(url, headers=headers, verify=False)
+                  if(response_vol.json()["clone"]["is_flexclone"]):
+                      vol_details.append(
+                          {
+                              "name": response_vol.json()['name'], 
+                              "uuid": response.json()['records'][i]['uuid'],
+                              "space_total": response_vol.json()['space']['size'],
+                              "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
+                              "guarantee": response_vol.json()['guarantee']['type'],
+                              "is_flexclone": True,
+                              "parent_snapshot": response_vol.json()['clone']['parent_snapshot']['name']
+                          }
+                      )
+                  else:
+                      vol_details.append(
+                          {
+                              "name": response_vol.json()['name'], 
+                              "uuid": response.json()['records'][i]['uuid'],
+                              "space_total": response_vol.json()['space']['size'],
+                              "space_used": response_vol.json()['space']['size'] - response_vol.json()['space']['available'],
+                              "guarantee": response_vol.json()['guarantee']['type'],
+                              "is_flexclone": False,
+                              "parent_snapshot": ""
+                          }
+                      )
+              return vol_details
+
+          def getSnapshotDetails(headers, vol_details, fsxMgmtIp, snapshot_details):
+              for vol in vol_details:
+                  url = "https://{}/api/storage/volumes/{}/snapshots".format(fsxMgmtIp, vol["uuid"])
+                  response_snapshots = requests.get(url, headers=headers, verify=False)
+                  for snapshot in response_snapshots.json()["records"]:
+                      snapshot_details.append(
+                          {
+                              "name": snapshot["name"],
+                              "uuid": snapshot["uuid"],
+                              "vol_name": vol["name"],
+                              "vol_uuid": vol["uuid"]
+                          }    
+                  )
+              return snapshot_details
+
+  #Trigger Rule for Monitoring Lambda function
+  LambdaFunctionScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Schedule rule to run Lambda function once a day"
+      ScheduleExpression: !Ref lambdaScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt FSxNMonitoringLambdaFunction.Arn
+          Id: "TargetFunctionV1"
+          
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt FSxNMonitoringLambdaFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt LambdaFunctionScheduleRule.Arn

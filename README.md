@@ -22,13 +22,14 @@ The solution provides the following features:
 * Ability to delete snapshots older than user-defined threshold
 * Ability to get a list of FlexClone volumes and snapshots associated
 * Ability to run the checks at a regular interval
+* Ability to use the solution with or without internet access
+* Ability to deploy the solution manually or using AWS CloudFormation Template
 
 ## Pre-requisites
 Before you begin, ensure that the following prerequisites are met: 
 
 * FSx for ONTAP is deployed
-* A Private Subnet with a NAT gateway attached is required by the lambda function for internet connectivity
-* The private subnet should also have connectivity to FSx for ONTAP
+* Private subnet with connectivity to FSx for ONTAP
 * "fsxadmin" password has been set for FSx for ONTAP
 
 
