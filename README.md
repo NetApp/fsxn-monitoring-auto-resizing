@@ -41,5 +41,6 @@ Note: The solution is provided as-is. Please test before deploying to production
 
 ## Author Information
 
-- [Dhruv Tyagi](mailto:dhruv.tyagi@netapp.com) - NetApp Solutions Engineering Team
+- Dhruv Tyagi - NetApp Solutions Engineering Team
+- [Vedant Sethia](mailto:vedant.sethia@netapp.com) - NetApp Solutions Engineering Team
 - [Niyaz Mohamed](mailto:niyaz.mohamed@netapp.com) - NetApp Solutions Engineering Team
