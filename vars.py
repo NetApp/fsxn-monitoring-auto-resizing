@@ -10,11 +10,10 @@ fsxList = [
         "snapshot_age_threshold_in_days" : 30
     }
 ]
-
+sender_email = ""
+recipient_email = ""
 internet_access = False
 # if internet access = False, set the below parameters
 smtp_region = ""
 smtp_username_ssm_parameter = ""
 smtp_password_ssm_parameter = ""
-sender_email = ""
-recipient_email = ""
