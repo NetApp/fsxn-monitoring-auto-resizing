@@ -88,10 +88,14 @@ def lambda_handler(event, context):
         else:
             print("aggr1 not found in output")
         
-        pattern = r"aggr1\s+(\d+\.?\d*)GB"
-        match = re.search(pattern, aggr_output)
-        if match:
-            aggr_total = float(match.group(1))
+        patternGB = r"aggr1\s+(\d+\.?\d*)GB"
+        patternTB = r"aggr1\s+(\d+\.?\d*)TB"
+        matchGB = re.search(patternGB, aggr_output)
+        matchTB = re.search(patternTB, aggr_output)
+        if matchGB:
+            aggr_total = float(matchGB.group(1))
+        elif matchTB:
+            aggr_total = float(matchTB.group(1))*1024 
         else:
             print("Total not found")
 
