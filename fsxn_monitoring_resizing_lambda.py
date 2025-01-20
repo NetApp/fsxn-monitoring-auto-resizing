@@ -77,6 +77,8 @@ def lambda_handler(event, context):
                 print("Error occurred while executing the command: ", e)
         
             ssh_client.close()
+            # Reset the host key policy to its default state
+            ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
         
         except Exception as e:
             print("Error occurred: ", e)
@@ -690,6 +692,8 @@ def lambda_handler(event, context):
                         print("Error occurred while executing the commands: ", e)
                 
                     ssh_client.close()
+                    # Reset the host key policy to its default state
+                    ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
                 
                 except Exception as e:
                     print("Error occurred: ", e)
