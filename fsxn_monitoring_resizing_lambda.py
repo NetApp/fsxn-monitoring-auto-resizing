@@ -25,10 +25,8 @@ import math
 import time
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-logging.getLogger("paramiko").setLevel(logging.WARNING)
 import boto3
 import botocore
-import paramiko
 import re
 import smtplib
 from email.mime.text import MIMEText
