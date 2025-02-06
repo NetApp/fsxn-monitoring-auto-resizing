@@ -88,7 +88,7 @@ Parameters:
     Description: Choose the Id of the private subnet 2 in Availability Zone 2.
     Type: AWS::EC2::Subnet::Id
   s3BucketName:
-    Description: Enter the name of the S3 Bucket where paramiko.zip and requests.zip is uploaded. Ensure S3 key for paramiko.zip is paramiko.zip and for requests.zip is requests.zip.
+    Description: Enter the name of the S3 Bucket where requests.zip is uploaded. Ensure S3 key for requests.zip is requests.zip.
     Type: String
   fsxMgmtIp:
     Description: Enter the "Management endpoint - IP address" from the FSx for ONTAP console on AWS.
@@ -685,16 +685,6 @@ Resources:
       Description: Python Requests module
       LayerName: requests
   
-  ParamikoLambdaLayer:
-    Type: AWS::Lambda::LayerVersion
-    Properties:
-      CompatibleRuntimes:
-        - python3.9
-      Content:
-        S3Bucket: !Ref s3BucketName
-        S3Key: Paramiko.zip
-      Description: Python Paramiko module
-      LayerName: paramiko
       
   #Security Group used by Monitoring Lambda function
   FsxMonitoringLambdaSecurityGroup:
@@ -753,7 +743,6 @@ Resources:
       Runtime: python3.9
       Layers:
         - !Ref RequestsLambdaLayer
-        - !Ref ParamikoLambdaLayer
       VpcConfig:
         SecurityGroupIds:
           - !Ref FsxMonitoringLambdaSecurityGroup
@@ -787,10 +776,8 @@ Resources:
           import time
           logger = logging.getLogger()
           logger.setLevel(logging.INFO)
-          logging.getLogger("paramiko").setLevel(logging.WARNING)
           import boto3
           import botocore
-          import paramiko
           import re
           import smtplib
           from email.mime.text import MIMEText
@@ -824,53 +811,6 @@ Resources:
               email_requirements = []
               clone_vol_details = []
               
-              #ssh to fsxn and get aggr1 capacity
-              try:
-                ssh_client = paramiko.SSHClient()
-                ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            
-                try:
-                  ssh_client.connect(fsxMgmtIp, username=username, password=fsxn_password)
-                except paramiko.AuthenticationException:
-                  print("Authentication failed, please verify your credentials.")
-                except paramiko.SSHException as sshException:
-                  print("Unable to establish an SSH connection: ", sshException)
-                except Exception as e:
-                  print("Error occurred while connecting: ", e)
-            
-                command = 'df -A -h'
-            
-                try:
-                  stdin, stdout, stderr = ssh_client.exec_command(command)
-                  aggr_output = stdout.read().decode().strip()
-                except Exception as e:
-                  print("Error occurred while executing the command: ", e)
-
-                # Reset the host key policy to its default state
-                ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
-                ssh_client.close()
-            
-              except Exception as e:
-                print("Error occurred: ", e)
-              
-              pattern = r'^aggr1\s+(\S+).*$'
-              match = re.search(pattern, aggr_output, re.MULTILINE)
-              if match:
-                  aggr_total = match.group(1)
-              else:
-                  print("aggr1 not found in output")
-
-              patternGB = r"aggr1\s+(\d+\.?\d*)GB"
-              patternTB = r"aggr1\s+(\d+\.?\d*)TB"
-              matchGB = re.search(patternGB, aggr_output)
-              matchTB = re.search(patternTB, aggr_output)
-              if matchGB:
-                  aggr_total = float(matchGB.group(1))
-              elif matchTB:
-                  aggr_total = float(matchTB.group(1))*1024 
-              else:
-                  print("Total not found")
-
               #initialize boto3 fsx
               client_fsx = boto3.client('fsx')
               
@@ -888,8 +828,70 @@ Resources:
                   'accept': "application/json"
               }
               
-              
-              
+              try:
+                  # URL for fetching aggregate details
+                  url_aggregate = "https://{}/api/storage/aggregates".format(fsxMgmtIp)
+
+                  # Fetch aggregate details
+                  response_aggregate = requests.get(url_aggregate, headers=headers, verify=False)
+
+                  if response_aggregate.status_code == 200:
+                      # Parse the JSON response
+                      aggr_data = response_aggregate.json()
+
+                      # Extract the list of records
+                      records = aggr_data.get('records', [])
+
+                      # Initialize variables
+                      aggr_total = None
+                      aggr_uuid = None
+
+                      # Iterate through the records to find the one with name 'aggr1'
+                      for record in records:
+                          if record.get('name') == 'aggr1':
+                              aggr_uuid = record.get('uuid')
+                              logger.info("UUID found for aggr1: %s", aggr_uuid)
+                              break
+
+                      if aggr_uuid:
+                          # URL for fetching data using UUID
+                          url_uuid = "https://{}/api/storage/aggregates/{}".format(fsxMgmtIp, aggr_uuid)
+
+                          # Fetch data using UUID
+                          response_uuid = requests.get(url_uuid, headers=headers, verify=False)
+                          logger.info("response_uuid: %s", response_uuid)
+
+                          if response_uuid.status_code == 200:
+                              # Parse the JSON response
+                              uuid_data = response_uuid.json()
+
+                              # Extract relevant fields
+                              block_storage = uuid_data.get('space', {}).get('block_storage', {})
+                              size_bytes = block_storage.get('size')
+
+                              if size_bytes is not None:
+                                  logger.info("Block storage details found for aggr1")
+
+                                  # Convert bytes to GB
+                                  size_gb = size_bytes / (1024 ** 3)
+
+                                  # Check if the size is in GB or TB
+                                  if size_gb < 1024:
+                                      aggr_total = size_gb
+                                  else:
+                                      aggr_total = size_gb / 1024
+
+                                  logger.info("Aggregate total size: %s GB", aggr_total)
+                              else:
+                                  logger.info("Block storage size not found in UUID output")
+                          else:
+                              logger.error("Failed to fetch data using UUID: %s %s", response_uuid.status_code, response_uuid.text)
+                      else:
+                          logger.info("UUID not found or aggregate name is not aggr1")
+                  else:
+                      logger.error("Failed to fetch aggregate details: %s %s", response_aggregate.status_code, response_aggregate.text)
+              except Exception as e:
+                  logger.error("Error occurred while fetching aggregate details: %s", e)
               #get lun details
               url_lun = "https://{}/api/storage/luns".format(fsxMgmtIp)
               response_lun = requests.get(url_lun, headers=headers, verify=False)
@@ -960,7 +962,7 @@ Resources:
                                 if response_lun_update.status_code not in range(200, 300):
                                   raise Exception(f"Failed to update LUN size. Status code: {response_lun_update.status_code}, Response: {response_lun_update.text}")
                               except Exception as e:
-                                print("An error occurred while updating the LUN size:", e)
+                                logger.error("An error occurred while updating the LUN size: %s", e)
 
                               log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
                               logger.info(log)
@@ -1009,7 +1011,7 @@ Resources:
                                       try:
                                         update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
                                       except botocore.exceptions.ClientError as e:
-                                        logger.info(e.response['Error']['Message'])
+                                        logger.error(e.response['Error']['Message'])
                                       try:
                                         url_job_monitor = "https://{}/api/cluster/jobs/{}".format(fsxMgmtIp, update['ResponseMetadata']['RequestId'])
                                         job_status = 0
@@ -1017,12 +1019,12 @@ Resources:
                                           response_job_monitor = requests.get(url_job_monitor, headers=headers, verify=False)
                                           job_status = response_job_monitor.json()['state']
                                           if job_status == "failure":
-                                            print("Failure in updating volume: {}".format(response_job_monitor.json()["error"]["message"]))
+                                            logger.info("Failure in updating volume: {}".format(response_job_monitor.json()["error"]["message"]))
                                           if response_job_monitor.status_code not in range(200, 300):
                                             raise Exception(f"Failed to update Volume size. Status code: {response_job_monitor.status_code}, Response: {response_job_monitor.text}")
                                           time.sleep(5)
                                       except Exception as e:
-                                        print("An error occurred while updating the Volume size:", e)
+                                        logger.error("An error occurred while updating the Volume size:", e)
                                       
                                       if job_status == "success":
                                         log = "LUN space used for LUN {} is greater than {}%. However volume size for volume {} cannot support increase in LUN size. Hence increasing volume size to {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold, response_lun_loop.json()['location']['volume']['name'], round((new_vol_size_mb/1024),2))                
@@ -1045,8 +1047,7 @@ Resources:
                                         if response_lun_update.status_code not in range(200, 300):
                                           raise Exception(f"Failed to update LUN size. Status code: {response_lun_update.status_code}, Response: {response_lun_update.text}")
                                       except Exception as e:
-                                        print("An error occurred while updating the LUN size:", e)
-                                      
+                                        logger.error("An error occurred while updating the LUN size: %s", e)
                                       log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
                                       logger.info(log)
                                       email_requirements.append(
@@ -1068,7 +1069,7 @@ Resources:
                                       try:
                                         update = client_fsx.update_file_system(FileSystemId = fsxId, StorageCapacity = size)
                                       except botocore.exceptions.ClientError as e:
-                                        logger.info(e.response['Error']['Message'])
+                                        logger.error(e.response['Error']['Message'])
                                       log = "Volume {} needs to be resized. However Storage capacity is out of space. Hence, File System Storage Capacity resized to: {} GB".format(response_lun_loop.json()['location']['volume']['name'], size)
                                       logger.info(log)
                                       email_requirements.append(
@@ -1116,7 +1117,7 @@ Resources:
                                   try:
                                     update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
                                   except botocore.exceptions.ClientError as e:
-                                    logger.info(e.response['Error']['Message'])
+                                    logger.error(e.response['Error']['Message'])
                                   try:
                                     url_job_monitor = "https://{}/api/cluster/jobs/{}".format(fsxMgmtIp, update['ResponseMetadata']['RequestId'])
                                     job_status = 0
@@ -1124,12 +1125,12 @@ Resources:
                                       response_job_monitor = requests.get(url_job_monitor, headers=headers, verify=False)
                                       job_status = response_job_monitor.json()['state']
                                       if job_status == "failure":
-                                        print("Failure in updating volume: {}".format(response_job_monitor.json()["error"]["message"]))
+                                        logger.info("Failure in updating volume: {}".format(response_job_monitor.json()["error"]["message"]))
                                       if response_job_monitor.status_code not in range(200, 300):
                                         raise Exception(f"Failed to update Volume size. Status code: {response_job_monitor.status_code}, Response: {response_job_monitor.text}")
                                       time.sleep(5)
                                   except Exception as e:
-                                    print("An error occurred while updating the Volume size:", e)
+                                    logger.error("An error occurred while updating the Volume size:", e)
                                   
                                   if job_status == "success":
                                     log = "LUN space used for LUN {} is greater than {}%. However volume size for volume {} cannot support increase in LUN size. Hence increasing volume size to {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold, response_lun_loop.json()['location']['volume']['name'], round(new_vol_size_mb/1024,2))                
@@ -1152,7 +1153,7 @@ Resources:
                                     if response_lun_update.status_code not in range(200, 300):
                                       raise Exception(f"Failed to update LUN size. Status code: {response_lun_update.status_code}, Response: {response_lun_update.text}")
                                   except Exception as e:
-                                    print("An error occurred while updating the LUN size:", e)
+                                    logger.error("An error occurred while updating the LUN size: %s", e)
                                   log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
                                   logger.info(log)
                                   email_requirements.append(
@@ -1175,7 +1176,7 @@ Resources:
                             if response_lun_update.status_code not in range(200, 300):
                               raise Exception(f"Failed to update LUN size. Status code: {response_lun_update.status_code}, Response: {response_lun_update.text}")
                           except Exception as e:
-                            print("An error occurred while updating the LUN size:", e)
+                            logger.error("An error occurred while updating the LUN size: %s", e)
                           log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],resize_threshold,round(new_lun_size/(1024*1024*1024),2))
                           logger.info(log)
                           email_requirements.append(
@@ -1241,6 +1242,7 @@ Resources:
                           }
                       )
                   if(float(vol_per) > float(resize_threshold)):
+                      logger.info("Volume space used for volume {} is {} and it is greater than {}%.".format(response_vol.json()['name'], float(vol_per), resize_threshold))
                       new_vol_size = float(response_vol.json()['space']['size']) * 1.05
                       new_vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(new_vol_size))*100 
                       while float(new_vol_per) > float(resize_threshold):
@@ -1276,7 +1278,7 @@ Resources:
                               try:
                                 update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
                               except botocore.exceptions.ClientError as e:
-                                logger.info(e.response['Error']['Message'])
+                                logger.error(e.response['Error']['Message'])
                               try:
                                 url_job_monitor = "https://{}/api/cluster/jobs/{}".format(fsxMgmtIp, update['ResponseMetadata']['RequestId'])
                                 job_status = 0
@@ -1284,13 +1286,12 @@ Resources:
                                   response_job_monitor = requests.get(url_job_monitor, headers=headers, verify=False)
                                   job_status = response_job_monitor.json()['state']
                                   if job_status == "failure":
-                                    print("Failure in updating volume: {}".format(response_job_monitor.json()["error"]["message"]))
+                                    logger.info("Failure in updating volume: {}".format(response_job_monitor.json()["error"]["message"]))
                                   if response_job_monitor.status_code not in range(200, 300):
                                     raise Exception(f"Failed to update Volume size. Status code: {response_job_monitor.status_code}, Response: {response_job_monitor.text}")
                                   time.sleep(5)
                               except Exception as e:
-                                print("An error occurred while updating the Volume size:", e)
-                              
+                                logger.error("An error occurred while updating the Volume size:", e)
                               if job_status == "success":
                                 log = "Volume space used for volume {} is greater than {}%. Volume resized to: {} GB".format(response_vol.json()['name'], resize_threshold, round(new_vol_size_mb/1024,2))
                                 logger.info(log)
@@ -1313,7 +1314,7 @@ Resources:
                               try:
                                 update = client_fsx.update_file_system(FileSystemId = fsxId, StorageCapacity = size)
                               except botocore.exceptions.ClientError as e:
-                                logger.info(e.response['Error']['Message'])
+                                logger.error(e.response['Error']['Message'])
                               log = "Volume {} needs to be resized. However Storage capacity is out of space. Hence, File System Storage Capacity resized to: {} GB".format(response_vol.json()['name'], size)
                               logger.info(log)
                               email_requirements.append(
@@ -1345,7 +1346,7 @@ Resources:
                           try:
                             update = client_fsx.update_volume(VolumeId = vol_id, OntapConfiguration = {'SizeInMegabytes': new_vol_size_mb})
                           except botocore.exceptions.ClientError as e:
-                            logger.info(e.response['Error']['Message'])
+                            logger.error(e.response['Error']['Message'])
                           try:
                             url_job_monitor = "https://{}/api/cluster/jobs/{}".format(fsxMgmtIp, update['ResponseMetadata']['RequestId'])
                             job_status = 0
@@ -1353,12 +1354,12 @@ Resources:
                               response_job_monitor = requests.get(url_job_monitor, headers=headers, verify=False)
                               job_status = response_job_monitor.json()['state']
                               if job_status == "failure":
-                                print("Failure in updating volume: {}".format(response_job_monitor.json()["error"]["message"]))
+                                logger.info("Failure in updating volume: {}".format(response_job_monitor.json()["error"]["message"]))
                               if response_job_monitor.status_code not in range(200, 300):
                                 raise Exception(f"Failed to update Volume size. Status code: {response_job_monitor.status_code}, Response: {response_job_monitor.text}")
                               time.sleep(5)
                           except Exception as e:
-                            print("An error occurred while updating the Volume size:", e)
+                            logger.error("An error occurred while updating the Volume size: %s", e)
                           
                           if job_status == "success":
                             log = "Volume space used for volume {} is greater than {}%. Volume resized to: {} GB".format(response_vol.json()['name'], resize_threshold, round(new_vol_size_mb/1024,2))
@@ -1409,7 +1410,7 @@ Resources:
                   try:
                     update = client_fsx.update_file_system(FileSystemId = fsxId, StorageCapacity = size)
                   except botocore.exceptions.ClientError as e:
-                    logger.info(e.response['Error']['Message'])
+                    logger.error(e.response['Error']['Message'])
                   log = "Total volume space used is greater than {}%. File System Storage Capacity resized to: {} GB".format(resize_threshold,size)
                   logger.info(log)
                   email_requirements.append(
@@ -1437,78 +1438,22 @@ Resources:
                           snapshot_name_not_present = False
                           break
                       try:
-                        ssh_client = paramiko.SSHClient()
-                        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    
-                        try:
-                            ssh_client.connect(fsxMgmtIp, username=username, password=fsxn_password)
-                        except paramiko.AuthenticationException:
-                            print("Authentication failed, please verify your credentials.")
-                        except paramiko.SSHException as sshException:
-                            print("Unable to establish an SSH connection: ", sshException)
-                        except Exception as e:
-                            print("Error occurred while connecting: ", e)
-                    
-                        try:
-                            command = 'snapshot show -volume ' + snapshot["vol_name"] + ' -snapshot ' + snapshot["name"] + ' -fields create-time'
-                            stdin, stdout, stderr = ssh_client.exec_command(command)
-                            ss_create_time_output = stdout.read().decode().strip()
-                    
-                            command = 'snapshot show -volume ' + snapshot["vol_name"] + ' -snapshot ' + snapshot["name"] + ' -fields size'
-                            stdin, stdout, stderr = ssh_client.exec_command(command)
-                            ss_size_output = stdout.read().decode().strip()
-                        except Exception as e:
-                            print("Error occurred while executing the commands: ", e)
+                        # Extract the create-time value
+                        create_time_str = snapshot["create_time"]
+                        create_time = datetime.fromisoformat(create_time_str.replace('Z', '+00:00'))
 
-                        # Reset the host key policy to its default state
-                        ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
-                        ssh_client.close()
-                  
-                      except Exception as e:
-                        print("Error occurred: ", e)
-                      
-                      # Extract the create-time value using regular expression
-                      match = re.search(r'\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+', ss_create_time_output)
-                      if match:
-                          create_time_str = match.group(0)
-                      else:
-                          print("Cannot find create-time value in output")
-                      
-                      try:
-                          create_time = datetime.strptime(create_time_str, '%a %b %d %H:%M:%S %Y').replace(tzinfo=timezone.utc)
-                          
-                          # Convert the create-time string to datetime object
-                          create_time = datetime.strptime(create_time_str, '%a %b %d %H:%M:%S %Y').replace(tzinfo=timezone.utc)
-                          
                           # Calculate how old the snapshot is in days
                           age_days = (datetime.now(timezone.utc) - create_time).days
                           snapshot["age_in_days"] = int(age_days)
                               
                       except ValueError as e:
-                          print(f"Error parsing create-time value: {create_time_str}")
+                          logger.error(f"Error parsing create-time value: {create_time_str}")
                           response_data = {"Status": "FAILED"}
                           
                       try:
-                          # Extract the size value from the output
-                          rows = ss_size_output.split("\n")
-                          last_row = rows[-1].split()
-                          size_str = last_row[3]
-                          
-                          # Extract the unit from the size string (i.e., the last two characters)
-                          unit = size_str[-2:].upper()
-                          
-                          # Convert the size value to an integer
-                          size_value = float(size_str[:-2])
-                          
-                          # Define a dictionary to map units to conversion factors
-                          unit_map = {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
-                          
-                          # Check if the unit is valid and convert the size value to bytes
-                          if unit in unit_map:
-                              size_bytes = size_value * unit_map[unit]
-                              snapshot["size_in_bytes"] = size_bytes
-                          else:
-                              print("Invalid unit")
+                          # Extract the size value from the snapshot details
+                          size_bytes = snapshot["size"]
+                          snapshot["size_in_bytes"] = size_bytes
 
                           #delete snapshot if older than threshold
                           if(int(snapshot["age_in_days"]) > snapshot_age_threshold_in_days and snapshot_name_not_present):
@@ -1516,7 +1461,7 @@ Resources:
                               try:
                                 response_ss_delete = requests.delete(url, headers=headers, verify=False)
                               except Exception as e:
-                                print("An error occurred while deleting the Snapshot: ", e)
+                                logger.error(f"An error occurred while deleting the Snapshot: {e}")
                               try:
                                 url_job_monitor = "https://{}/api/cluster/jobs/{}".format(fsxMgmtIp, response_ss_delete.json()['job']['uuid'])
                                 job_status = 0
@@ -1524,15 +1469,15 @@ Resources:
                                   response_job_monitor = requests.get(url_job_monitor, headers=headers, verify=False)
                                   job_status = response_job_monitor.json()['state']
                                   if job_status == "failure":
-                                    print("Failure in deleting snapshot {}: {}".format(snapshot['name'], response_job_monitor.json()["error"]["message"]))
+                                    logger.info("Failure in deleting snapshot %s: %s", snapshot['name'], response_job_monitor.json()["error"]["message"])
                                   if response_job_monitor.status_code not in range(200, 300):
-                                    raise Exception(f"Failed to delete Snapshot {snapshot['name']}. Status code: {response_job_monitor.status_code}, Response: {response_job_monitor.text}")
+                                    raise Exception("Failed to delete Snapshot %s. Status code: %d, Response: %s" % (snapshot['name'], response_job_monitor.status_code, response_job_monitor.text))
                                   time.sleep(5)
                               except Exception as e:
-                                print("An error occurred while deleting the Snapshot {}:".format(snapshot["name"]), e)
+                                logger.error("An error occurred while deleting the Snapshot %s: %s", snapshot["name"], e)
                               
                               if job_status == "success":
-                                log = "Snapshot {} for volume {} has been deleted as it is {} days old which is above the threshold of {} days. ".format(snapshot["name"], snapshot["vol_name"], int(snapshot["age_in_days"]), snapshot_age_threshold_in_days)
+                                log = "Snapshot %s for volume %s has been deleted as it is %d days old which is above the threshold of %d days." % (snapshot['name'], snapshot['vol_name'], int(snapshot['age_in_days']), snapshot_age_threshold_in_days)
                                 logger.info(log)
                                 email_requirements.append(
                                     {
@@ -1544,8 +1489,8 @@ Resources:
                                     }
                                 )
 
-                      except ValueError as e:
-                          print(f"Error parsing size value: {size_str}")
+                      except Exception as e:
+                          logger.error("Error while fetching size value: %s", e)
                           response_data = {"Status": "FAILED"}
               
               #populate flexclone details
@@ -1715,10 +1660,10 @@ Resources:
                           # Disconnect from the SMTP server
                           smtp_conn.quit()
                   
-                          print("Email sent!")
+                          logger.info("Email sent!")
                           
                       except Exception as e:
-                          print('Email sending failed: {}'.format(e))
+                          logger.error('Email sending failed: {}'.format(e))
                   
                   else:
                       client = boto3.client('ses')
@@ -1743,7 +1688,7 @@ Resources:
                               Source=sender_email,
                           )
                       except botocore.exceptions.ClientError as e:
-                          logger.info(e.response['Error']['Message'])
+                          logger.error(e.response['Error']['Message'])
                       else:
                           logger.info("Email sent!")
 
@@ -1759,9 +1704,9 @@ Resources:
                   else:
                       return storage_capacity
               except botocore.exceptions.ClientError as e:
-                  logger.info("Error Occurred while invoking FSX describe_file_systems: {}".format(e))
+                  logger.error("Error Occurred while invoking FSX describe_file_systems: {}".format(e))
               except botocore.exceptions.ParamValidationError as error:
-                  logger.info("The parameters you provided are incorrect: {}".format(error))
+                  logger.error("The parameters you provided are incorrect: {}".format(error))
 
           def getVolDetails(headers, vol_details, fsxMgmtIp):
               url = "https://{}/api/storage/volumes".format(fsxMgmtIp)
@@ -1798,18 +1743,28 @@ Resources:
               return vol_details
 
           def getSnapshotDetails(headers, vol_details, fsxMgmtIp, snapshot_details):
+              snapshot_details = []
               for vol in vol_details:
                   url = "https://{}/api/storage/volumes/{}/snapshots".format(fsxMgmtIp, vol["uuid"])
                   response_snapshots = requests.get(url, headers=headers, verify=False)
                   for snapshot in response_snapshots.json()["records"]:
-                      snapshot_details.append(
-                          {
-                              "name": snapshot["name"],
-                              "uuid": snapshot["uuid"],
-                              "vol_name": vol["name"],
-                              "vol_uuid": vol["uuid"]
-                          }    
-                  )
+                      # Fetch detailed snapshot information
+                      snapshot_url = "https://{}/api/storage/volumes/{}/snapshots/{}".format(fsxMgmtIp, vol["uuid"], snapshot["uuid"])
+                      try:
+                          response_snapshot_detail = requests.get(snapshot_url, headers=headers, verify=False)
+                          snapshot_info = response_snapshot_detail.json()
+                          snapshot_details.append(
+                              {
+                                  "name": snapshot["name"],
+                                  "uuid": snapshot["uuid"],
+                                  "vol_name": vol["name"],
+                                  "vol_uuid": vol["uuid"],
+                                  "create_time": snapshot_info["create_time"],
+                                  "size": snapshot_info["size"]
+                              }
+                          )
+                      except Exception as e:
+                          logger.error("Failed to fetch snapshot details: %s", e)
               return snapshot_details
 
   #Trigger Rule for Monitoring Lambda function
