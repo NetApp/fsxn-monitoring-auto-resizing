@@ -202,7 +202,7 @@ def lambda_handler(event, context):
                             if response_lun_update.status_code not in range(200, 300):
                                 raise Exception(f"Failed to update LUN size. Status code: {response_lun_update.status_code}, Response: {response_lun_update.text}")
                         except Exception as e:
-                            logger.error("An error occurred while updating the LUN size:", e)
+                            logger.error("An error occurred while updating the LUN size: %s", e)
 
                         log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],vars.fsxList[fsxs]['resize_threshold'],round(new_lun_size/(1024*1024*1024),2))
                         logger.info(log)
@@ -287,7 +287,7 @@ def lambda_handler(event, context):
                                     if response_lun_update.status_code not in range(200, 300):
                                         raise Exception(f"Failed to update LUN size. Status code: {response_lun_update.status_code}, Response: {response_lun_update.text}")
                                 except Exception as e:
-                                    logger.error("An error occurred while updating the LUN size:", e)
+                                    logger.error("An error occurred while updating the LUN size: %s", e)
                                 log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],vars.fsxList[fsxs]['resize_threshold'],round(new_lun_size/(1024*1024*1024),2))
                                 logger.info(log)
                                 email_requirements.append(
@@ -393,7 +393,7 @@ def lambda_handler(event, context):
                                 if response_lun_update.status_code not in range(200, 300):
                                     raise Exception(f"Failed to update LUN size. Status code: {response_lun_update.status_code}, Response: {response_lun_update.text}")
                             except Exception as e:
-                                logger.error("An error occurred while updating the LUN size:", e)
+                                logger.error("An error occurred while updating the LUN size: %s", e)
                             log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],vars.fsxList[fsxs]['resize_threshold'],round(new_lun_size/(1024*1024*1024),2))
                             logger.info(log)
                             email_requirements.append(
@@ -416,7 +416,7 @@ def lambda_handler(event, context):
                         if response_lun_update.status_code not in range(200, 300):
                             raise Exception(f"Failed to update LUN size. Status code: {response_lun_update.status_code}, Response: {response_lun_update.text}")
                     except Exception as e:
-                        logger.error("An error occurred while updating the LUN size:", e)
+                        logger.error("An error occurred while updating the LUN size: %s", e)
                     log = "LUN space used for LUN {} is greater than {}%. LUN resized to: {} GB".format(response_lun_loop.json()['location']['logical_unit'],vars.fsxList[fsxs]['resize_threshold'],round(new_lun_size/(1024*1024*1024),2))
                     logger.info(log)
                     email_requirements.append(
@@ -482,6 +482,7 @@ def lambda_handler(event, context):
                     }
                 )
             if(float(vol_per) > float(vars.fsxList[fsxs]['resize_threshold'])):
+                logger.info("Volume space used for volume {} is {} and it is greater than {}%.".format(response_vol.json()['name'], float(vol_per), vars.fsxList[fsxs]['resize_threshold']))
                 new_vol_size = float(response_vol.json()['space']['size']) * 1.05
                 new_vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(new_vol_size))*100 
                 while float(new_vol_per) > float(vars.fsxList[fsxs]['resize_threshold']):
@@ -599,7 +600,7 @@ def lambda_handler(event, context):
                                 raise Exception(f"Failed to update Volume size. Status code: {response_job_monitor.status_code}, Response: {response_job_monitor.text}")
                             time.sleep(5)
                     except Exception as e:
-                        logger.error("An error occurred while updating the Volume size:", e)
+                        logger.error("An error occurred while updating the Volume size: %s", e)
                     
                     if job_status == "success":
                         log = "Volume space used for volume {} is greater than {}%. Volume resized to: {} GB".format(response_vol.json()['name'], vars.fsxList[fsxs]['resize_threshold'], round(new_vol_size_mb/1024,2))
