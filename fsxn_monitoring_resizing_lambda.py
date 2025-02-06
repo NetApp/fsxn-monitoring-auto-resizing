@@ -701,7 +701,7 @@ def lambda_handler(event, context):
                         try:
                             response_ss_delete = requests.delete(url, headers=headers, verify=False)
                         except Exception as e:
-                            logger.error("An error occurred while deleting the Snapshot: ", e)
+                            logger.error(f"An error occurred while deleting the Snapshot: {e}")
                         try:
                             url_job_monitor = "https://{}/api/cluster/jobs/{}".format(vars.fsxList[fsxs]['fsxMgmtIp'], response_ss_delete.json()['job']['uuid'])
                             job_status = 0
@@ -709,15 +709,15 @@ def lambda_handler(event, context):
                                 response_job_monitor = requests.get(url_job_monitor, headers=headers, verify=False)
                                 job_status = response_job_monitor.json()['state']
                                 if job_status == "failure":
-                                    logger.info("Failure in deleting snapshot {}: {}".format(snapshot['name'], response_job_monitor.json()["error"]["message"]))
+                                    logger.info("Failure in deleting snapshot %s: %s", snapshot['name'], response_job_monitor.json()["error"]["message"])
                                 if response_job_monitor.status_code not in range(200, 300):
-                                    raise Exception(f"Failed to delete Snapshot {snapshot['name']}. Status code: {response_job_monitor.status_code}, Response: {response_job_monitor.text}")
+                                    raise Exception("Failed to delete Snapshot %s. Status code: %d, Response: %s" % (snapshot['name'], response_job_monitor.status_code, response_job_monitor.text))
                                 time.sleep(5)
                         except Exception as e:
-                            logger.error("An error occurred while deleting the Snapshot {}:".format(snapshot["name"]), e)
+                            logger.error("An error occurred while deleting the Snapshot %s: %s", snapshot["name"], e)
                         
                         if job_status == "success":
-                            log = "Snapshot {} for volume {} has been deleted as it is {} days old which is above the threshold of {} days. ".format(snapshot["name"], snapshot["vol_name"], int(snapshot["age_in_days"]), vars.fsxList[fsxs]['snapshot_age_threshold_in_days'])
+                            log = "Snapshot %s for volume %s has been deleted as it is %d days old which is above the threshold of %d days." % (snapshot['name'], snapshot['vol_name'], int(snapshot['age_in_days']), vars.fsxList[fsxs]['snapshot_age_threshold_in_days'])
                             logger.info(log)
                             email_requirements.append(
                                 {
@@ -730,7 +730,7 @@ def lambda_handler(event, context):
                             )
 
                 except Exception as e:
-                    logger.error(f"Error while fetching size value: {e}")
+                    logger.error("Error while fetching size value: %s", e)
         
         #populate flexclone details
         for vol in vol_details:
