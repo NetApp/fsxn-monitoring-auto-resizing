@@ -1441,10 +1441,9 @@ Resources:
                         # Extract the create-time value
                         create_time_str = snapshot["create_time"]
                         create_time = datetime.fromisoformat(create_time_str.replace('Z', '+00:00'))
-
-                          # Calculate how old the snapshot is in days
-                          age_days = (datetime.now(timezone.utc) - create_time).days
-                          snapshot["age_in_days"] = int(age_days)
+                        # Calculate how old the snapshot is in days
+                        age_days = (datetime.now(timezone.utc) - create_time).days
+                        snapshot["age_in_days"] = int(age_days)
                               
                       except ValueError as e:
                           logger.error(f"Error parsing create-time value: {create_time_str}")
