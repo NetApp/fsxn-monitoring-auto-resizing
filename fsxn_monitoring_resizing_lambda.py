@@ -175,6 +175,7 @@ def lambda_handler(event, context):
                 
                 #check if LUN is thick provisioned
                 if(response_lun_loop.json()['space']['guarantee']['reserved'] == True):
+                    logger.info("LUN is thick provisioned")
                     #check if vol size can accomodate new lun size
                     lun_space_used = 0
                     for lun in lun_details:
@@ -225,6 +226,7 @@ def lambda_handler(event, context):
 
                         #Volume is thick provisioned
                         if(response_vol.json()['guarantee']['type'] == "volume"):
+                            logger.info("LUN: Volume is thick provisioned")
                             #check if sc can accomodate new vol size
                             sc_space_used = 0
                             vol_details = getVolDetails(headers, [], vars.fsxList[fsxs]['fsxMgmtIp'])
@@ -349,6 +351,7 @@ def lambda_handler(event, context):
                                 # logger.info(log)
                         #volume is thin provisioned
                         else:
+                            logger.info("LUN: Volume is thin provisioned")
                             #update vol
                             all_vol_details = client_fsx.describe_volumes()
                             for vol in all_vol_details['Volumes']:
@@ -408,6 +411,7 @@ def lambda_handler(event, context):
 
                 #LUN is thin provisioned
                 else:
+                    logger.info("LUN is thin provisioned")
                     #update lun
                     try:
                         data = { "space": { "size": new_lun_size}}
@@ -437,6 +441,7 @@ def lambda_handler(event, context):
     
     
         #get volume details
+        logger.info("Get volume details")
         url = "https://{}/api/storage/volumes".format(vars.fsxList[fsxs]['fsxMgmtIp'])
         response = requests.get(url, headers=headers, verify=False)
         
@@ -470,6 +475,7 @@ def lambda_handler(event, context):
                 )
             
             #check if volume needs resizing and resize if allowed and send email
+            logger.info("Checking if volume needs resizing and resize if allowed and send email")
             vol_per = (float(response_vol.json()['space']['size'] - response_vol.json()['space']['available'])/float(response_vol.json()['space']['size']))*100 
             if(vars.fsxList[fsxs]['warn_notification'] and float(vol_per) > 75 and float(vol_per) < float(vars.fsxList[fsxs]['resize_threshold'])):
                 email_requirements.append(
@@ -493,6 +499,7 @@ def lambda_handler(event, context):
 
                 #thick provisioned volume
                 if(response_vol.json()['guarantee']['type'] == "volume"):
+                    logger.info("Preparing to update volume: thin provisioned volume")
 
                     #check if sc can accomodate new vol size
                     sc_space_used = 0
@@ -579,6 +586,7 @@ def lambda_handler(event, context):
                         # logger.info(log)
                 #thin provisioned volume
                 else:
+                    logger.info("Preparing to update volume: thin provisioned volume")
                     #update vol
                     all_vol_details = client_fsx.describe_volumes()
                     for vol in all_vol_details['Volumes']:
@@ -621,6 +629,7 @@ def lambda_handler(event, context):
         
         
         #calculate % storage capacity used
+        logger.info("Calculating storage capacity used")
         total_space_used = 0
         for vol in vol_details:
             if(vol['guarantee'] == "volume"):
@@ -670,6 +679,7 @@ def lambda_handler(event, context):
 
         
         #Get snapshot details
+        logger.info("Preparing to fetch Snapshot details")
         if(vars.fsxList[fsxs]['enable_snapshot_deletion']):
             snapshot_details = getSnapshotDetails(headers, vol_details, vars.fsxList[fsxs]['fsxMgmtIp'], snapshot_details)
             for snapshot in snapshot_details:
@@ -681,6 +691,7 @@ def lambda_handler(event, context):
 
                 try:
                     # Extract the create-time value
+                    logger.info("Extracting the create-time value from the snapshot details")
                     create_time_str = snapshot["create_time"]
                     create_time = datetime.fromisoformat(create_time_str.replace('Z', '+00:00'))
 
@@ -693,10 +704,12 @@ def lambda_handler(event, context):
                     
                 try:
                     # Extract the size value from the snapshot details
+                    logger.info("Extracting the size value from the snapshot details")
                     size_bytes = snapshot["size"]
                     snapshot["size_in_bytes"] = size_bytes
 
                     #delete snapshot if older than threshold
+                    logger.info("Preparing to delete snapshot if older than threshold")
                     if(int(snapshot["age_in_days"]) > vars.fsxList[fsxs]['snapshot_age_threshold_in_days'] and snapshot_name_not_present):
                         url = "https://{}/api/storage/volumes/{}/snapshots/{}".format(vars.fsxList[fsxs]['fsxMgmtIp'], snapshot["vol_uuid"], snapshot["uuid"])
                         try:
@@ -734,6 +747,7 @@ def lambda_handler(event, context):
                     logger.error("Error while fetching size value: %s", e)
         
         #populate flexclone details
+        logger.info("Populating flexclone details")
         for vol in vol_details:
             if(vol["is_flexclone"]):
                 for snapshot in snapshot_details:
@@ -757,6 +771,7 @@ def lambda_handler(event, context):
     }
 
 def sendEmail(email_requirements, clone_vol_details):
+    logger.info("Preparing to send an Email")
     lun_output_str = []
     vol_output_str = []
     sc_output_str = []
@@ -924,6 +939,7 @@ def sendEmail(email_requirements, clone_vol_details):
                 logger.info("Email sent!")
 
 def getStorageCapacity(client_fsx, fsxId):
+    logger.info("Fetching Storage Capacity")
     try:
         response_fsx = client_fsx.describe_file_systems(FileSystemIds=[str(fsxId)])
         storage_capacity = str(response_fsx['FileSystems'][0]['StorageCapacity'])
@@ -940,6 +956,7 @@ def getStorageCapacity(client_fsx, fsxId):
         logger.error("The parameters you provided are incorrect: {}".format(error))
 
 def getVolDetails(headers, vol_details, fsxMgmtIp):
+    logger.info("Fetching Volume Details")
     url = "https://{}/api/storage/volumes".format(fsxMgmtIp)
     response = requests.get(url, headers=headers, verify=False)
     
@@ -974,6 +991,7 @@ def getVolDetails(headers, vol_details, fsxMgmtIp):
     return vol_details
 
 def getSnapshotDetails(headers, vol_details, fsxMgmtIp, snapshot_details):
+    logger.info("Fetching Snapshot Details")
     snapshot_details = []
     for vol in vol_details:
         url = "https://{}/api/storage/volumes/{}/snapshots".format(fsxMgmtIp, vol["uuid"])
